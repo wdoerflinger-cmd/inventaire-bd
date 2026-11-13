@@ -69,6 +69,8 @@ textarea{min-height:64px;resize:vertical}
 .card-head{display:flex;gap:12px;align-items:flex-start}
 .cover{width:72px;aspect-ratio:2/3;flex:none;border-radius:6px;background:var(--line);object-fit:cover;max-width:100%}
 .cover.ph{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);text-align:center;padding:4px}
+.coverwrap{position:relative;display:block;flex:none;padding:0;border:none;background:none;min-height:0;border-radius:6px;cursor:pointer}
+.coverwrap .cam{position:absolute;right:-6px;bottom:-6px;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#1b2a4a;display:flex;align-items:center;justify-content:center;border:2px solid var(--panel)}
 .snapcover{flex-direction:column;gap:4px;min-height:0;border:2px dashed var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--ink);font:600 11px/1.15 var(--font-body);cursor:pointer;hyphens:manual}
 .card-title{min-width:0;display:flex;flex-direction:column;gap:4px}
 .card-title h3{margin:0;font:600 17px/1.25 var(--font-display)}
@@ -118,6 +120,22 @@ dialog .card{border:none}
   padding:10px 14px;border-radius:12px;display:flex;gap:12px;align-items:center;max-width:calc(100vw - 32px);z-index:20;font-size:14px}
 .toast button{min-height:32px;padding:4px 10px;background:transparent;color:var(--accent);border-color:var(--accent)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/* Recadrage de la couverture */
+dialog.crop{width:min(640px,100vw);max-width:100vw;max-height:100dvh;margin:auto}
+@media (max-width:640px){dialog.crop{width:100vw;height:100dvh;border-radius:0}}
+.crop-in{display:flex;flex-direction:column;gap:10px;padding:14px max(14px,env(safe-area-inset-left,0px)) calc(14px + env(safe-area-inset-bottom,0px));height:100%}
+.crop-head{display:flex;flex-direction:column;gap:2px}
+.crop-head strong{font:600 17px var(--font-display)}
+.crop-msg{font-size:13px;color:var(--muted);min-height:1.4em}
+.crop-stage{position:relative;flex:1 1 auto;min-height:240px;display:flex;align-items:center;justify-content:center;background:#0b0e14;border-radius:12px;overflow:hidden;touch-action:none}
+.crop-stage canvas{display:block;max-width:100%}
+.crop-stage svg{position:absolute;overflow:visible}
+.crop-stage .poly{fill:rgba(255,204,41,.14);stroke:var(--accent);stroke-width:2}
+.crop-stage .h{fill:var(--accent);stroke:#1b2a4a;stroke-width:2}
+.crop-stage .hit{fill:transparent;cursor:grab}
+.crop-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.crop-actions button{min-height:40px;padding:6px 8px;font-size:13px}
+.crop-main{display:grid;grid-template-columns:1fr 2fr;gap:8px}
 </style>
 </head>
 <body>
@@ -146,7 +164,7 @@ dialog .card{border:none}
       <button class="ghost" id="btnTorch" hidden>Lampe</button>
       <label class="btn ghost" for="photo">Scanner depuis une photo</label>
       <input type="file" id="photo" accept="image/*" capture="environment" hidden>
-      <input type="file" id="coverPhoto" accept="image/*" capture="environment" hidden>
+      <input type="file" id="coverPhoto" accept="image/*" hidden>
     </div>
     <form class="manual" id="manualForm">
       <input id="manualIsbn" inputmode="numeric" class="mono" placeholder="Saisir un ISBN à la main" aria-label="ISBN" autocomplete="off">
@@ -183,6 +201,19 @@ dialog .card{border:none}
 </main>
 
 <dialog id="dlg"><div id="dlgBody"></div></dialog>
+<dialog id="dlgCrop" class="crop"><div class="crop-in">
+  <div class="crop-head"><strong>Recadrer la couverture</strong><span class="crop-msg" id="cropMsg" aria-live="polite"></span></div>
+  <div class="crop-stage" id="cropStage"><canvas id="cropCanvas"></canvas><svg id="cropSvg"></svg></div>
+  <div class="crop-actions">
+    <button type="button" class="ghost" id="cropAuto">Détecter les bords</button>
+    <button type="button" class="ghost" id="cropRotate">Pivoter</button>
+    <button type="button" class="ghost" id="cropFull">Image entière</button>
+  </div>
+  <div class="crop-main">
+    <button type="button" id="cropCancel">Annuler</button>
+    <button type="button" class="primary" id="cropOk">Valider le recadrage</button>
+  </div>
+</div></dialog>
 <dialog id="dlgSync"><form class="card" id="syncForm">
   <h3 style="margin:0;font:600 18px var(--font-display)">Synchronisation Google Sheet</h3>
   <p class="hint">Chaque scan et chaque modification sont envoyés dans ton Google Sheet. Le téléphone garde une copie : sans réseau, les envois attendent et partent dès que la connexion revient.</p>
@@ -392,7 +423,7 @@ function coverHtml(b){
 const SNAP_COVER = `<button type="button" class="cover ph snapcover" data-act="snap" aria-label="Photographier la couverture"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Photo&shy;graphier</button>`;
 function editorCover(b){
   const u = coverUrl(b);
-  if(u) return `<img class="cover" src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="this.outerHTML=this.dataset.snap" data-snap="${esc(SNAP_COVER)}">`;
+  if(u) return `<button type="button" class="coverwrap" data-act="snap" aria-label="Remplacer la couverture"><img class="cover" src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.outerHTML=this.dataset.snap" data-snap="${esc(SNAP_COVER)}"><span class="cam"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg></span></button>`;
   return b.loading ? `<div class="cover ph">…</div>` : SNAP_COVER;
 }
 function coverPicker(b){
@@ -400,7 +431,7 @@ function coverPicker(b){
       <img src="${esc(c.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">${esc(c.src)}</button>`).join("");
   const mine = b.photo && photoUrls.get(b.isbn) ? `<button type="button" data-act="usephoto" aria-pressed="true"><img src="${photoUrls.get(b.isbn)}" alt="">Ma photo</button>` : "";
   return `<div class="field full"><span class="label">Couverture</span>
-    <div class="covers">${mine}${opts}<button type="button" class="snap" data-act="snap">${b.photo?"Reprendre la photo":"Photographier la couverture"}</button></div>
+    <div class="covers">${mine}${opts}<button type="button" class="snap" data-act="snap">${b.photo ? "Remplacer ma photo" : (b.couverture ? "Remplacer par ma photo" : "Photographier la couverture")}</button></div>
     ${!b.loading && !(b.couvertures||[]).length && !b.photo ? `<span class="hint">Aucune couverture trouvée en ligne. Prenez-la en photo.</span>` : ""}</div>`;
 }
 function chip(b){
@@ -592,10 +623,214 @@ $("photo").addEventListener("change", async (e) => {
     if(code){ beep(); addIsbn(code, "photo"); } else toast("Aucun code-barres lu sur la photo. Rapprochez-vous et évitez les reflets.");
   } catch(_){ toast("Impossible de lire cette photo."); }
 });
+/* ---------- Recadrage de la couverture ----------
+   Après la photo : détection automatique des bords du livre (OpenCV, chargé à la demande),
+   4 coins ajustables au doigt, puis redressement de la perspective. */
+const CV_URL = "https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.10.0-release.1/dist/opencv.js";
+let cvPromise = null;
+function loadCv(){
+  if(!cvPromise) cvPromise = new Promise((ok, ko) => {
+    const s = document.createElement("script"); s.src = CV_URL; s.async = true;
+    s.onload = async () => {
+      try {
+        let c = window.cv;
+        if(c && typeof c.then === "function" && !c.Mat){ c = await new Promise(r => { const t = c.then; delete c.then; t.call(c, m => { r(m); }); }); }
+        if(!c.Mat) await new Promise(r => { c.onRuntimeInitialized = r; });
+        window.cv = c; ok(c);
+      } catch(e){ ko(e); }
+    };
+    s.onerror = () => { cvPromise = null; ko(new Error("opencv")); };
+    document.head.appendChild(s);
+  });
+  return cvPromise;
+}
+function orderPts(p){
+  const bySum = [...p].sort((a,b) => (a.x+a.y) - (b.x+b.y)), byDiff = [...p].sort((a,b) => (a.y-a.x) - (b.y-b.x));
+  return [bySum[0], byDiff[0], bySum[3], byDiff[3]]; // haut-gauche, haut-droite, bas-droite, bas-gauche
+}
+function detectQuad(cv, cnv){
+  const W = cnv.width, H = cnv.height, area = W * H, mats = [];
+  const keep = (m) => { mats.push(m); return m; };
+  const rect = (n) => keep(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(n, n)));
+  let best = null, bestScore = 0;
+  try {
+    const src = keep(cv.imread(cnv)), gray = keep(new cv.Mat());
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, gray, new cv.Size(5,5), 0);
+    // Carte des bords (sensible) qui sert à noter chaque quadrilatère candidat.
+    const ed = keep(new cv.Mat()); cv.Canny(gray, ed, 20, 60); cv.dilate(ed, ed, rect(3), new cv.Point(-1,-1), 2);
+    const edges = ed.data;
+    const onEdge = (x, y) => { x = Math.round(x); y = Math.round(y); return x >= 0 && y >= 0 && x < W && y < H && edges[y*W + x] > 0; };
+    const support = (q) => { const f = [];
+      for(let i = 0; i < 4; i++){ const a = q[i], b = q[(i+1)%4]; let hit = 0; for(let k = 1; k < 40; k++){ const t = k/40; if(onEdge(a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t)) hit++; } f.push(hit/39); }
+      return 0.6 * f.reduce((s,v) => s+v, 0) / 4 + 0.4 * Math.min(...f); };
+    const polyArea = (q) => Math.abs(q.reduce((s,p,i) => { const n = q[(i+1)%4]; return s + p.x*n.y - n.x*p.y; }, 0)) / 2;
+    // Plusieurs façons de séparer le livre du fond : contours (deux réglages) et contraste (clair sur foncé, foncé sur clair).
+    const masks = [];
+    for(const [t1, t2, ks] of [[30,100,5],[15,50,11]]){ const m = keep(new cv.Mat()); cv.Canny(gray, m, t1, t2); cv.morphologyEx(m, m, cv.MORPH_CLOSE, rect(ks)); masks.push(m); }
+    for(const inv of [false, true]){ const m = keep(new cv.Mat());
+      cv.threshold(gray, m, 0, 255, (inv ? cv.THRESH_BINARY_INV : cv.THRESH_BINARY) + cv.THRESH_OTSU);
+      cv.morphologyEx(m, m, cv.MORPH_OPEN, rect(7)); cv.morphologyEx(m, m, cv.MORPH_CLOSE, rect(7)); masks.push(m); }
+    for(const m of masks){
+      const cnts = keep(new cv.MatVector()), hier = keep(new cv.Mat());
+      cv.findContours(m, cnts, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      for(let i = 0; i < cnts.size(); i++){
+        const c = keep(cnts.get(i)), hull = keep(new cv.Mat()); cv.convexHull(c, hull);
+        const a = cv.contourArea(hull); if(a < area * 0.12 || a > area * 0.97) continue;
+        const peri = cv.arcLength(hull, true), hp = [], cands = [];
+        for(let j = 0; j < hull.rows; j++) hp.push({ x: hull.data32S[j*2], y: hull.data32S[j*2+1] });
+        for(const eps of [0.015, 0.025, 0.04, 0.06, 0.08]){
+          const ap = keep(new cv.Mat()); cv.approxPolyDP(hull, ap, eps * peri, true);
+          if(ap.rows === 4){ const d = ap.data32S; cands.push(orderPts([0,1,2,3].map(k => ({ x: d[k*2], y: d[k*2+1] })))); }
+        }
+        cands.push(orderPts(hp));
+        cands.push(orderPts(cv.RotatedRect.points(cv.minAreaRect(hull)).map(p => ({ x: p.x, y: p.y }))));
+        for(const q of cands){
+          if(polyArea(q) < area * 0.12) continue;
+          const sc = support(q); if(sc > bestScore){ bestScore = sc; best = q; }
+        }
+      }
+    }
+    // Affinage : chaque côté est déplacé (ses deux extrémités, perpendiculairement) pour coller au bord réel le plus net,
+    // puis les coins sont recalculés comme intersections des côtés. Rattrape un coin mal placé quand un bord est peu visible.
+    if(best && bestScore >= 0.3){
+      const D = Math.round(Math.max(W, H) * 0.08);
+      const sideScore = (a, b) => { let hit = 0; for(let k = 2; k < 38; k++){ const t = k/40; if(onEdge(a.x+(b.x-a.x)*t, a.y+(b.y-a.y)*t)) hit++; } return hit/36; };
+      const inter = (p1, p2, p3, p4) => { const d = (p1.x-p2.x)*(p3.y-p4.y) - (p1.y-p2.y)*(p3.x-p4.x); if(Math.abs(d) < 1e-6) return null;
+        const a1 = p1.x*p2.y - p1.y*p2.x, a2 = p3.x*p4.y - p3.y*p4.x; return { x: (a1*(p3.x-p4.x) - (p1.x-p2.x)*a2)/d, y: (a1*(p3.y-p4.y) - (p1.y-p2.y)*a2)/d }; };
+      let q = best;
+      for(let pass = 0; pass < 2; pass++){
+        const sides = [];
+        for(let i = 0; i < 4; i++){
+          const a = q[i], b = q[(i+1)%4], len = Math.hypot(b.x-a.x, b.y-a.y) || 1, nx = -(b.y-a.y)/len, ny = (b.x-a.x)/len;
+          let bs = sideScore(a, b), ba = a, bb = b;
+          for(let da = -D; da <= D; da += 2) for(let db = -D; db <= D; db += 2){
+            const a2 = { x: a.x+nx*da, y: a.y+ny*da }, b2 = { x: b.x+nx*db, y: b.y+ny*db }, sc = sideScore(a2, b2);
+            if(sc > bs + 0.02){ bs = sc; ba = a2; bb = b2; }
+          }
+          sides.push([ba, bb]);
+        }
+        const nq = [0,1,2,3].map(i => inter(...sides[(i+3)%4], ...sides[i]));
+        if(nq.some(p => !p || p.x < -W*0.05 || p.y < -H*0.05 || p.x > W*1.05 || p.y > H*1.05) || polyArea(nq) < area * 0.12) break;
+        q = nq;
+      }
+      const sq = support(q); if(sq >= bestScore - 0.02){ best = q; bestScore = Math.max(bestScore, sq); }
+    }
+  } finally { mats.forEach(m => { try { m.delete(); } catch(_){} }); }
+  if(!best || bestScore < 0.45) return null;
+  return best.map(p => ({ x: Math.min(1, Math.max(0, p.x / W)), y: Math.min(1, Math.max(0, p.y / H)) }));
+}
+function solve8(A, b){
+  const n = 8, M = A.map((r,i) => [...r, b[i]]);
+  for(let c = 0; c < n; c++){
+    let piv = c; for(let r = c+1; r < n; r++) if(Math.abs(M[r][c]) > Math.abs(M[piv][c])) piv = r;
+    [M[c], M[piv]] = [M[piv], M[c]];
+    for(let r = 0; r < n; r++){ if(r === c) continue; const f = M[r][c] / M[c][c]; for(let k2 = c; k2 <= n; k2++) M[r][k2] -= f * M[c][k2]; }
+  }
+  return M.map((r,i) => r[n] / r[i]);
+}
+function homography(from, to){
+  const A = [], b = [];
+  for(let i = 0; i < 4; i++){ const {x,y} = from[i], {x:u,y:v} = to[i];
+    A.push([x,y,1,0,0,0,-u*x,-u*y]); b.push(u); A.push([0,0,0,x,y,1,-v*x,-v*y]); b.push(v); }
+  return [...solve8(A,b), 1];
+}
+function warp(srcCnv, quadN){
+  const W = srcCnv.width, H = srcCnv.height, q = quadN.map(p => ({ x: p.x * W, y: p.y * H }));
+  const d = (a,b) => Math.hypot(a.x-b.x, a.y-b.y);
+  let ow = Math.max(d(q[0],q[1]), d(q[3],q[2])), oh = Math.max(d(q[0],q[3]), d(q[1],q[2]));
+  const sc = Math.min(1, 1000 / Math.max(ow, oh)); ow = Math.max(20, Math.round(ow*sc)); oh = Math.max(20, Math.round(oh*sc));
+  const h = homography([{x:0,y:0},{x:ow,y:0},{x:ow,y:oh},{x:0,y:oh}], q);
+  const sd = srcCnv.getContext("2d").getImageData(0,0,W,H).data;
+  const out = new ImageData(ow, oh), od = out.data;
+  for(let y = 0; y < oh; y++) for(let x = 0; x < ow; x++){
+    const X = x + .5, Y = y + .5, w = h[6]*X + h[7]*Y + 1;
+    let sx = (h[0]*X + h[1]*Y + h[2]) / w - .5, sy = (h[3]*X + h[4]*Y + h[5]) / w - .5;
+    sx = Math.min(W-1.001, Math.max(0, sx)); sy = Math.min(H-1.001, Math.max(0, sy));
+    const x0 = sx|0, y0 = sy|0, fx = sx-x0, fy = sy-y0, i00 = (y0*W+x0)*4, i10 = i00+4, i01 = i00+W*4, i11 = i01+4, o = (y*ow+x)*4;
+    for(let c = 0; c < 3; c++) od[o+c] = (sd[i00+c]*(1-fx) + sd[i10+c]*fx)*(1-fy) + (sd[i01+c]*(1-fx) + sd[i11+c]*fx)*fy;
+    od[o+3] = 255;
+  }
+  const c = document.createElement("canvas"); c.width = ow; c.height = oh; c.getContext("2d").putImageData(out, 0, 0);
+  return new Promise(ok => c.toBlob(ok, "image/jpeg", .86));
+}
+const DEFAULT_QUAD = [{x:.1,y:.1},{x:.9,y:.1},{x:.9,y:.9},{x:.1,y:.9}];
+let crop = null;
+function openCropper(file){
+  return new Promise(async (resolve) => {
+    let bmp; try { bmp = await createImageBitmap(file); } catch(_){ resolve(undefined); return; }
+    const s = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const full = document.createElement("canvas"); full.width = Math.round(bmp.width*s); full.height = Math.round(bmp.height*s);
+    full.getContext("2d").drawImage(bmp, 0, 0, full.width, full.height);
+    crop = { full, quad: DEFAULT_QUAD.map(p => ({...p})), resolve, drag: -1 };
+    $("dlgCrop").showModal(); layoutCrop(); autoDetect();
+  });
+}
+function cropMsg(t){ $("cropMsg").textContent = t; }
+function layoutCrop(){
+  if(!crop) return;
+  const st = $("cropStage"), cnv = $("cropCanvas"), f = crop.full;
+  const sw = st.clientWidth, sh = st.clientHeight, sc = Math.min(sw / f.width, sh / f.height);
+  const w = Math.round(f.width*sc), h = Math.round(f.height*sc), dpr = Math.min(2, devicePixelRatio || 1);
+  cnv.width = w*dpr; cnv.height = h*dpr; cnv.style.width = w+"px"; cnv.style.height = h+"px";
+  cnv.getContext("2d").drawImage(f, 0, 0, cnv.width, cnv.height);
+  const svg = $("cropSvg"); svg.setAttribute("width", w); svg.setAttribute("height", h); svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.style.left = (cnv.offsetLeft)+"px"; svg.style.top = (cnv.offsetTop)+"px";
+  crop.w = w; crop.h = h; drawQuad();
+}
+function drawQuad(){
+  const {w, h, quad} = crop, pts = quad.map(p => [p.x*w, p.y*h]);
+  $("cropSvg").innerHTML = `<polygon class="poly" points="${pts.map(p=>p.join(",")).join(" ")}"/>` +
+    pts.map((p,i) => `<circle class="h" cx="${p[0]}" cy="${p[1]}" r="11"/><circle class="hit" data-i="${i}" cx="${p[0]}" cy="${p[1]}" r="26"/>`).join("");
+}
+async function autoDetect(){
+  cropMsg("Recherche des bords du livre…"); $("cropAuto").disabled = true;
+  try {
+    const cv = await withTimeout(loadCv(), 30000);
+    if(!crop) return;
+    const f = crop.full, s = Math.min(1, 520 / Math.max(f.width, f.height)), small = document.createElement("canvas");
+    small.width = Math.round(f.width*s); small.height = Math.round(f.height*s); small.getContext("2d").drawImage(f, 0, 0, small.width, small.height);
+    const q = detectQuad(cv, small);
+    if(q){ crop.quad = q; drawQuad(); cropMsg("Bords détectés. Ajustez les coins si besoin, puis validez."); }
+    else cropMsg("Bords non trouvés. Placez les 4 coins sur les angles du livre.");
+  } catch(_){ if(crop) cropMsg("Détection indisponible. Placez les 4 coins sur les angles du livre."); }
+  finally { $("cropAuto").disabled = false; }
+}
+function closeCrop(result){ const c = crop; crop = null; $("dlgCrop").close(); if(c) c.resolve(result); }
+$("cropSvg").addEventListener("pointerdown", (e) => {
+  const i = e.target.dataset && e.target.dataset.i; if(i == null || !crop) return;
+  crop.drag = +i; $("cropSvg").setPointerCapture(e.pointerId); e.preventDefault();
+});
+$("cropSvg").addEventListener("pointermove", (e) => {
+  if(!crop || crop.drag < 0) return;
+  const r = $("cropSvg").getBoundingClientRect();
+  crop.quad[crop.drag] = { x: Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (e.clientY - r.top) / r.height)) };
+  drawQuad();
+});
+["pointerup","pointercancel"].forEach(t => $("cropSvg").addEventListener(t, () => { if(crop) crop.drag = -1; }));
+$("cropAuto").onclick = autoDetect;
+$("cropFull").onclick = () => { if(!crop) return; crop.quad = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}]; drawQuad(); cropMsg("Image entière sélectionnée."); };
+$("cropRotate").onclick = () => {
+  if(!crop) return; const f = crop.full, r = document.createElement("canvas"); r.width = f.height; r.height = f.width;
+  const g = r.getContext("2d"); g.translate(r.width, 0); g.rotate(Math.PI/2); g.drawImage(f, 0, 0);
+  crop.full = r; crop.quad = crop.quad.map(p => ({ x: 1 - p.y, y: p.x })); crop.quad = orderPts(crop.quad); layoutCrop();
+};
+$("cropCancel").onclick = () => closeCrop(null);
+$("dlgCrop").addEventListener("cancel", (e) => { e.preventDefault(); closeCrop(null); });
+$("cropOk").onclick = async () => {
+  if(!crop) return; $("cropOk").disabled = true; cropMsg("Redressement de l'image…");
+  try { const blob = await warp(crop.full, crop.quad); closeCrop(blob); } catch(_){ cropMsg("Recadrage impossible. Essayez « Image entière »."); }
+  finally { $("cropOk").disabled = false; }
+};
+addEventListener("resize", () => { if(crop) layoutCrop(); });
+
 let snapFor = null;
 $("coverPhoto").addEventListener("change", async (e) => {
   const f = e.target.files[0]; e.target.value = ""; const b = books.find(x=>x.isbn===snapFor); if(!f || !b) return;
-  try { const blob = await resizeToJpeg(f); await photoPut(b.isbn, blob);
+  let blob = await openCropper(f);
+  if(blob === null) return;                       // recadrage annulé
+  try { if(!blob) blob = await resizeToJpeg(f);   // image illisible par l'outil : on garde la photo entière
+    await photoPut(b.isbn, blob);
     if(photoUrls.has(b.isbn)) URL.revokeObjectURL(photoUrls.get(b.isbn));
     photoUrls.set(b.isbn, URL.createObjectURL(blob)); b.photo = true;
     if(!sync.photos.includes(b.isbn)) sync.photos.push(b.isbn); saveSync(); touch(b);

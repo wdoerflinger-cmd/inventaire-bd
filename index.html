@@ -69,6 +69,7 @@ textarea{min-height:64px;resize:vertical}
 .card-head{display:flex;gap:12px;align-items:flex-start}
 .cover{width:72px;aspect-ratio:2/3;flex:none;border-radius:6px;background:var(--line);object-fit:cover;max-width:100%}
 .cover.ph{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);text-align:center;padding:4px}
+.snapcover{flex-direction:column;gap:4px;min-height:0;border:2px dashed var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--ink);font:600 11px/1.15 var(--font-body);cursor:pointer;hyphens:manual}
 .card-title{min-width:0;display:flex;flex-direction:column;gap:4px}
 .card-title h3{margin:0;font:600 17px/1.25 var(--font-display)}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;border-radius:999px;padding:3px 10px;width:fit-content}
@@ -82,7 +83,7 @@ textarea{min-height:64px;resize:vertical}
 /* Liste */
 .list-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .list-head input{flex:1 1 180px}
-.filters{display:flex;gap:6px}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
 .filters button{min-height:36px;padding:6px 12px;font-size:13px}
 .filters button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
 ul.books{list-style:none;margin:0;padding:0;border-top:1.5px solid var(--line)}
@@ -98,7 +99,7 @@ ul.books .q{font-size:12px;color:var(--muted);font-weight:500}
 .covers button{padding:3px;min-height:0;border-radius:8px;border:2px solid var(--line);background:var(--paper);flex:none;display:flex;flex-direction:column;gap:2px;font-size:10px;font-weight:500;color:var(--muted)}
 .covers button img{width:56px;aspect-ratio:2/3;object-fit:cover;border-radius:4px;display:block}
 .covers button[aria-pressed="true"]{border-color:var(--accent);color:var(--ink)}
-.covers .snap{width:64px;height:auto;align-self:stretch;border-style:dashed;font-size:12px;color:var(--ink);padding:6px;text-align:center}
+.covers .snap{width:auto;min-width:112px;height:auto;white-space:normal;line-height:1.2;align-self:stretch;border-style:dashed;font-size:12px;color:var(--ink);padding:6px;text-align:center}
 textarea.resume{min-height:110px}
 .syncbtn{flex:1 1 100%;justify-content:flex-start;min-height:36px;padding:6px 12px;font-size:13px;font-weight:500;border-color:var(--line)}
 .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
@@ -165,6 +166,7 @@ dialog .card{border:none}
       <div class="filters" role="group" aria-label="Filtre">
         <button id="fAll" aria-pressed="true">Tous</button>
         <button id="fTodo" aria-pressed="false">À compléter <span id="todoCount"></span></button>
+        <button id="fNoCover" aria-pressed="false">Sans couverture <span id="noCoverCount"></span></button>
       </div>
     </div>
     <ul class="books" id="list"></ul>
@@ -358,6 +360,7 @@ async function resizeToJpeg(file, max=900){
 function coverUrl(b){ return b.photo && photoUrls.get(b.isbn) ? photoUrls.get(b.isbn) : b.couverture; }
 
 /* ---------- Ajout ---------- */
+function noCover(b){ return !b.loading && !b.photo && !b.couverture; }
 function isTodo(b){ return !b.loading && (!b.titre || b.prix==null || b.prix===""); }
 
 async function addIsbn(raw, origin){
@@ -369,7 +372,7 @@ async function addIsbn(raw, origin){
     toast(`Déjà dans l'inventaire : quantité ${existing.qte}`, "Annuler", () => { existing.qte = Math.max(0, existing.qte-1); touch(existing); save(); render(); showLast(isbn); });
     return;
   }
-  const b = { isbn, titre:"", auteurs:"", editeur:"", serie:"", tome:"", langue:"", prix:null, qte:1, etat:"Neuf",
+  const b = { isbn, titre:"", auteurs:"", editeur:"", serie:"", tome:"", langue:"", prix:null, qte:1, etat:"Très bon état",
     annee:"", couverture:"", couvertures:[], photo:false, resume:"", notes:"", sources:"", ajoute:new Date().toISOString(), loading:true };
   books.unshift(b); save(); render(); showLast(isbn);
   try { Object.assign(b, await lookup(isbn)); } catch(e){ /* reste à compléter */ }
@@ -384,6 +387,13 @@ function coverHtml(b){
   const u = coverUrl(b);
   return u ? `<img class="cover" src="${esc(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.outerHTML='<div class=&quot;cover ph&quot;>sans image</div>'">`
            : `<div class="cover ph">${b.loading?"…":"sans image"}</div>`;
+}
+/* Dans la fiche : une couverture absente (ou qui ne charge pas) devient un bouton qui ouvre l'appareil photo. */
+const SNAP_COVER = `<button type="button" class="cover ph snapcover" data-act="snap" aria-label="Photographier la couverture"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Photo&shy;graphier</button>`;
+function editorCover(b){
+  const u = coverUrl(b);
+  if(u) return `<img class="cover" src="${esc(u)}" alt="" referrerpolicy="no-referrer" onerror="this.outerHTML=this.dataset.snap" data-snap="${esc(SNAP_COVER)}">`;
+  return b.loading ? `<div class="cover ph">…</div>` : SNAP_COVER;
 }
 function coverPicker(b){
   const opts = (b.couvertures||[]).map(c => `<button type="button" data-act="cover" data-url="${esc(c.url)}" aria-pressed="${!b.photo && b.couverture===c.url}">
@@ -406,20 +416,21 @@ function render(){
   const todo = books.filter(isTodo).length; $("todoCount").textContent = todo ? `(${todo})` : "";
   syncStatus();
   const q = $("search").value.trim().toLowerCase();
-  const shown = books.filter(b => (filter==="all"||isTodo(b)) && (!q || [b.titre,b.auteurs,b.isbn,b.serie,b.editeur].join(" ").toLowerCase().includes(q)));
+  const nc = books.filter(noCover).length; $("noCoverCount").textContent = nc ? `(${nc})` : "";
+  const shown = books.filter(b => (filter==="all" || (filter==="todo" && isTodo(b)) || (filter==="nocover" && noCover(b))) && (!q || [b.titre,b.auteurs,b.isbn,b.serie,b.editeur].join(" ").toLowerCase().includes(q)));
   $("list").innerHTML = shown.length ? shown.map(b=>`
     <li data-isbn="${b.isbn}" tabindex="0">
       ${coverHtml(b)}
       <div class="meta"><div class="t">${esc(b.titre) || `<span class="missing">${b.loading?"Recherche…":"Titre inconnu"}</span>`}</div>
         <div class="a">${esc(b.auteurs)||'<span class="mono">'+b.isbn+'</span>'}</div></div>
       <div class="p">${b.prix!=null&&b.prix!=="" ? eur(b.prix) : `<span class="missing">${b.loading?"":"prix ?"}</span>`}${qn(b.qte)===0?`<div class="q missing">vendu</div>`:(qn(b.qte)>1?`<div class="q">× ${b.qte}</div>`:"")}</div>
-    </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? "Aucun livre ne correspond." : "Aucun livre pour l'instant. Scannez votre premier code-barres."}</li>`;
+    </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? (filter==="nocover" ? "Tous les livres ont une couverture." : "Aucun livre ne correspond.") : "Aucun livre pour l'instant. Scannez votre premier code-barres."}</li>`;
 }
 function editorHtml(b, inDialog){
   const opt = (arr, v) => arr.map(x=>`<option${x===v?" selected":""}>${x}</option>`).join("");
   const langs = [...new Set(["Français","Anglais","Allemand","Espagnol","Italien","Néerlandais","Japonais", b.langue].filter(Boolean))];
   return `<div class="card" data-isbn="${b.isbn}">
-    <div class="card-head">${coverHtml(b)}
+    <div class="card-head">${editorCover(b)}
       <div class="card-title"><h3>${esc(b.titre)||"Titre à compléter"}</h3>
         <span class="mono" style="font-size:13px;color:var(--muted)">ISBN ${b.isbn}</span>${chip(b)}</div></div>
     <div class="grid">
@@ -486,8 +497,10 @@ $("list").addEventListener("click", (e)=>{ const li = e.target.closest("li[data-
 $("list").addEventListener("keydown", (e)=>{ if(e.key==="Enter") e.target.click(); });
 $("dlg").addEventListener("click", (e)=>{ if(e.target===$("dlg")) $("dlg").close(); });
 $("search").addEventListener("input", render);
-$("fAll").onclick = () => { filter="all"; $("fAll").setAttribute("aria-pressed","true"); $("fTodo").setAttribute("aria-pressed","false"); render(); };
-$("fTodo").onclick = () => { filter="todo"; $("fTodo").setAttribute("aria-pressed","true"); $("fAll").setAttribute("aria-pressed","false"); render(); };
+function setFilter(f){ filter = f; [["fAll","all"],["fTodo","todo"],["fNoCover","nocover"]].forEach(([id,v]) => $(id).setAttribute("aria-pressed", String(v===f))); render(); }
+$("fAll").onclick = () => setFilter("all");
+$("fTodo").onclick = () => setFilter("todo");
+$("fNoCover").onclick = () => setFilter("nocover");
 
 /* ---------- Toast ---------- */
 let toastTimer;
@@ -654,7 +667,7 @@ $("importCsv").addEventListener("change", async (e) => {
   rows.forEach(r => { const o = {}; idx.forEach(([k,i]) => { if(i>=0) o[k] = (r[i]||"").replace(/​/g,""); });
     const isbn = normalize(o.isbn); if(!isbn || books.some(b=>b.isbn===isbn)) return;
     if(o.couverture==="photo personnelle") o.couverture = ""; delete o.fichier;
-    books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: qn(o.qte), etat:o.etat||"Neuf", loading:false }); added++; });
+    books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: qn(o.qte), etat:o.etat||"Très bon état", loading:false }); added++; });
   save(); render(); scheduleSync(); toast(`${added} livre${added>1?"s":""} importé${added>1?"s":""}.`);
 });
 $("btnClear").onclick = (e) => {

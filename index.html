@@ -365,8 +365,8 @@ async function addIsbn(raw, origin){
   if(!isbn){ toast(`« ${raw} » n'est pas un ISBN valide.`); return; }
   const existing = books.find(b=>b.isbn===isbn);
   if(existing){
-    existing.qte = (+existing.qte||1) + 1; touch(existing); save(); render(); showLast(isbn);
-    toast(`Déjà dans l'inventaire : quantité ${existing.qte}`, "Annuler", () => { existing.qte = Math.max(1, existing.qte-1); touch(existing); save(); render(); showLast(isbn); });
+    existing.qte = qn(existing.qte) + 1; touch(existing); save(); render(); showLast(isbn);
+    toast(`Déjà dans l'inventaire : quantité ${existing.qte}`, "Annuler", () => { existing.qte = Math.max(0, existing.qte-1); touch(existing); save(); render(); showLast(isbn); });
     return;
   }
   const b = { isbn, titre:"", auteurs:"", editeur:"", serie:"", tome:"", langue:"", prix:null, qte:1, etat:"Neuf",
@@ -377,6 +377,7 @@ async function addIsbn(raw, origin){
 }
 
 /* ---------- Rendu ---------- */
+const qn = (q) => (q === "" || q == null || isNaN(+q)) ? 1 : Math.max(0, +q);
 const eur = (v) => (v==null||v==="") ? "" : Number(v).toLocaleString("fr-FR",{style:"currency",currency:"EUR"});
 const esc = (s) => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 function coverHtml(b){
@@ -398,8 +399,8 @@ function chip(b){
   return `<span class="chip ok">Trouvé${b.sources?" · "+esc(b.sources):""}</span>`;
 }
 function render(){
-  const total = books.reduce((s,b)=>s+(+b.qte||1),0);
-  const value = books.reduce((s,b)=>s+((+b.prix||0)*(+b.qte||1)),0);
+  const total = books.reduce((s,b)=>s+qn(b.qte),0);
+  const value = books.reduce((s,b)=>s+((+b.prix||0)*qn(b.qte)),0);
   $("sCount").textContent = total; $("sTitles").textContent = books.length;
   $("sValue").textContent = value.toLocaleString("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0});
   const todo = books.filter(isTodo).length; $("todoCount").textContent = todo ? `(${todo})` : "";
@@ -411,7 +412,7 @@ function render(){
       ${coverHtml(b)}
       <div class="meta"><div class="t">${esc(b.titre) || `<span class="missing">${b.loading?"Recherche…":"Titre inconnu"}</span>`}</div>
         <div class="a">${esc(b.auteurs)||'<span class="mono">'+b.isbn+'</span>'}</div></div>
-      <div class="p">${b.prix!=null&&b.prix!=="" ? eur(b.prix) : `<span class="missing">${b.loading?"":"prix ?"}</span>`}${(+b.qte>1)?`<div class="q">× ${b.qte}</div>`:""}</div>
+      <div class="p">${b.prix!=null&&b.prix!=="" ? eur(b.prix) : `<span class="missing">${b.loading?"":"prix ?"}</span>`}${qn(b.qte)===0?`<div class="q missing">vendu</div>`:(qn(b.qte)>1?`<div class="q">× ${b.qte}</div>`:"")}</div>
     </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? "Aucun livre ne correspond." : "Aucun livre pour l'instant. Scannez votre premier code-barres."}</li>`;
 }
 function editorHtml(b, inDialog){
@@ -429,7 +430,7 @@ function editorHtml(b, inDialog){
       <label class="field"><span class="label">Éditeur</span><input data-k="editeur" value="${esc(b.editeur)}"></label>
       <label class="field"><span class="label">Langue</span><select data-k="langue"><option value=""></option>${opt(langs,b.langue)}</select></label>
       <label class="field"><span class="label">Prix public (€)</span><input data-k="prix" inputmode="decimal" class="mono" placeholder="voir dos du livre" value="${b.prix==null?"":String(b.prix).replace(".",",")}"></label>
-      <label class="field"><span class="label">Quantité</span><input data-k="qte" type="number" min="1" value="${b.qte||1}"></label>
+      <label class="field"><span class="label">Quantité dispo</span><input data-k="qte" type="number" min="0" value="${qn(b.qte)}"></label>
       <label class="field full"><span class="label">État</span><select data-k="etat">${opt(ETATS,b.etat)}</select></label>
       ${coverPicker(b)}
       <label class="field full"><span class="label">Résumé</span><textarea class="resume" data-k="resume" placeholder="${b.loading?"Recherche…":"Pas de résumé trouvé. Vous pouvez recopier la 4e de couverture."}">${esc(b.resume)}</textarea></label>
@@ -450,7 +451,7 @@ function bindEditor(root){
     const isbn = e.target.closest("[data-isbn]").dataset.isbn; const b = books.find(x=>x.isbn===isbn); if(!b) return;
     let v = e.target.value;
     if(k==="prix") v = v.trim()==="" ? null : (parsePrice(v.replace(",",".")+"€") ?? b.prix);
-    if(k==="qte") v = Math.max(1, parseInt(v,10)||1);
+    if(k==="qte"){ if(v.trim()==="") return; v = Math.max(0, parseInt(v,10)||0); }
     b[k] = v; touch(b, 4000); save(); render();
   });
   root.addEventListener("click", async (e)=>{
@@ -653,7 +654,7 @@ $("importCsv").addEventListener("change", async (e) => {
   rows.forEach(r => { const o = {}; idx.forEach(([k,i]) => { if(i>=0) o[k] = (r[i]||"").replace(/​/g,""); });
     const isbn = normalize(o.isbn); if(!isbn || books.some(b=>b.isbn===isbn)) return;
     if(o.couverture==="photo personnelle") o.couverture = ""; delete o.fichier;
-    books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: parseInt(o.qte,10)||1, etat:o.etat||"Neuf", loading:false }); added++; });
+    books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: qn(o.qte), etat:o.etat||"Neuf", loading:false }); added++; });
   save(); render(); scheduleSync(); toast(`${added} livre${added>1?"s":""} importé${added>1?"s":""}.`);
 });
 $("btnClear").onclick = (e) => {
@@ -721,7 +722,7 @@ async function pull(){
   for(const r of j.books){
     const isbn = normalize(r.isbn); if(!isbn) continue;
     const t = Date.parse(r.modifie) || 0; const local = books.find(b => b.isbn === isbn);
-    const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: +r.qte || 1, modifie: t, synced: t, loading:false };
+    const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: qn(r.qte), modifie: t, synced: t, loading:false };
     delete data.photo;
     if(!local){ books.push({ ...data, photo:false, couvertures: r.couverture ? [{src:"Sheet", url:r.couverture}] : [] }); added++; }
     else if(t > (local.modifie || 0) && !isDirty(local)){ Object.assign(local, data); updated++; }

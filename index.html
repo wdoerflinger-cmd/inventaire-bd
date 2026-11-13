@@ -100,6 +100,12 @@ ul.books .q{font-size:12px;color:var(--muted);font-weight:500}
 .covers button[aria-pressed="true"]{border-color:var(--accent);color:var(--ink)}
 .covers .snap{width:64px;height:auto;align-self:stretch;border-style:dashed;font-size:12px;color:var(--ink);padding:6px;text-align:center}
 textarea.resume{min-height:110px}
+.syncbtn{flex:1 1 100%;justify-content:flex-start;min-height:36px;padding:6px 12px;font-size:13px;font-weight:500;border-color:var(--line)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+.dot.ok{background:var(--ok)}.dot.wait{background:var(--accent)}.dot.err{background:var(--danger)}
+.msg{font-size:13px;margin:0;min-height:1.4em}
+.msg.err{color:var(--danger)}.msg.ok{color:var(--ok)}
+a{color:inherit}
 .empty{color:var(--muted);text-align:center;padding:24px 8px}
 .actions{display:flex;gap:8px;flex-wrap:wrap}
 .actions>*{flex:1 1 140px}
@@ -122,6 +128,7 @@ dialog .card{border:none}
       <span><b id="sTitles">0</b> titres</span>
       <span><b id="sValue">0 €</b> prix neuf</span>
     </div>
+    <button class="syncbtn" id="syncBtn"><span class="dot" id="syncDot"></span><span id="syncTxt">Google Sheet : à configurer</span></button>
   </header>
 
   <section class="scanner" aria-label="Scanner">
@@ -174,6 +181,20 @@ dialog .card{border:none}
 </main>
 
 <dialog id="dlg"><div id="dlgBody"></div></dialog>
+<dialog id="dlgSync"><form class="card" id="syncForm">
+  <h3 style="margin:0;font:600 18px var(--font-display)">Synchronisation Google Sheet</h3>
+  <p class="hint">Chaque scan et chaque modification sont envoyés dans ton Google Sheet. Le téléphone garde une copie : sans réseau, les envois attendent et partent dès que la connexion revient.</p>
+  <label class="field"><span class="label">Adresse de l'application Web (Apps Script)</span>
+    <input id="syncUrl" class="mono" placeholder="https://script.google.com/macros/s/…/exec" autocomplete="off" style="font-size:13px"></label>
+  <label class="field"><span class="label">Code d'accès</span>
+    <input id="syncToken" class="mono" autocomplete="off"></label>
+  <p class="msg" id="syncMsg" aria-live="polite"></p>
+  <div class="row">
+    <button type="submit" class="primary">Enregistrer et tester</button>
+    <button type="button" id="btnPull">Récupérer depuis le Sheet</button>
+    <button type="button" class="ghost" id="btnSyncClose">Fermer</button>
+  </div>
+</form></dialog>
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -187,6 +208,7 @@ const LANGS = {fre:"Français",fr:"Français",eng:"Anglais",en:"Anglais",ger:"Al
 const ETATS = ["Neuf","Comme neuf","Très bon état","Bon état","État correct"];
 
 let books = load();
+let sync = loadSync();
 let filter = "all";
 let lastIsbn = null;
 
@@ -343,15 +365,15 @@ async function addIsbn(raw, origin){
   if(!isbn){ toast(`« ${raw} » n'est pas un ISBN valide.`); return; }
   const existing = books.find(b=>b.isbn===isbn);
   if(existing){
-    existing.qte = (+existing.qte||1) + 1; save(); render(); showLast(isbn);
-    toast(`Déjà dans l'inventaire : quantité ${existing.qte}`, "Annuler", () => { existing.qte = Math.max(1, existing.qte-1); save(); render(); showLast(isbn); });
+    existing.qte = (+existing.qte||1) + 1; touch(existing); save(); render(); showLast(isbn);
+    toast(`Déjà dans l'inventaire : quantité ${existing.qte}`, "Annuler", () => { existing.qte = Math.max(1, existing.qte-1); touch(existing); save(); render(); showLast(isbn); });
     return;
   }
   const b = { isbn, titre:"", auteurs:"", editeur:"", serie:"", tome:"", langue:"", prix:null, qte:1, etat:"Neuf",
     annee:"", couverture:"", couvertures:[], photo:false, resume:"", notes:"", sources:"", ajoute:new Date().toISOString(), loading:true };
   books.unshift(b); save(); render(); showLast(isbn);
   try { Object.assign(b, await lookup(isbn)); } catch(e){ /* reste à compléter */ }
-  b.loading = false; save(); render(); if(lastIsbn===isbn) showLast(isbn);
+  b.loading = false; touch(b); save(); render(); if(lastIsbn===isbn) showLast(isbn);
 }
 
 /* ---------- Rendu ---------- */
@@ -381,6 +403,7 @@ function render(){
   $("sCount").textContent = total; $("sTitles").textContent = books.length;
   $("sValue").textContent = value.toLocaleString("fr-FR",{style:"currency",currency:"EUR",maximumFractionDigits:0});
   const todo = books.filter(isTodo).length; $("todoCount").textContent = todo ? `(${todo})` : "";
+  syncStatus();
   const q = $("search").value.trim().toLowerCase();
   const shown = books.filter(b => (filter==="all"||isTodo(b)) && (!q || [b.titre,b.auteurs,b.isbn,b.serie,b.editeur].join(" ").toLowerCase().includes(q)));
   $("list").innerHTML = shown.length ? shown.map(b=>`
@@ -428,18 +451,19 @@ function bindEditor(root){
     let v = e.target.value;
     if(k==="prix") v = v.trim()==="" ? null : (parsePrice(v.replace(",",".")+"€") ?? b.prix);
     if(k==="qte") v = Math.max(1, parseInt(v,10)||1);
-    b[k] = v; save(); render();
+    b[k] = v; touch(b, 4000); save(); render();
   });
   root.addEventListener("click", async (e)=>{
     const actEl = e.target.closest("[data-act]"); if(!actEl) return;
     const act = actEl.dataset.act;
     const isbn = e.target.closest("[data-isbn]").dataset.isbn; const b = books.find(x=>x.isbn===isbn);
     if(act==="close"){ $("dlg").close(); return; }
-    if(act==="cover" && b){ b.couverture = e.target.closest("button").dataset.url; b.photo = false; save(); render(); refreshEditors(isbn); return; }
+    if(act==="cover" && b){ b.couverture = actEl.dataset.url; b.photo = false; sync.photos = sync.photos.filter(x=>x!==isbn); saveSync(); touch(b); save(); render(); refreshEditors(isbn); return; }
     if(act==="usephoto"){ return; }
     if(act==="snap"){ snapFor = isbn; $("coverPhoto").click(); return; }
     if(act==="del"){
       if(e.target.dataset.armed){ books = books.filter(x=>x.isbn!==isbn); photoDel(isbn); photoUrls.delete(isbn); save(); render();
+        if(sync.url){ sync.deleted.push(isbn); sync.photos = sync.photos.filter(x=>x!==isbn); saveSync(); scheduleSync(); }
         if(lastIsbn===isbn){ $("lastWrap").hidden = true; lastIsbn=null; } if($("dlg").open) $("dlg").close(); toast("Livre supprimé"); }
       else { e.target.dataset.armed = "1"; e.target.textContent = "Confirmer la suppression"; setTimeout(()=>{ if(e.target.isConnected){ delete e.target.dataset.armed; e.target.textContent="Supprimer"; } }, 4000); }
       return;
@@ -447,7 +471,7 @@ function bindEditor(root){
     if(act==="retry" && b){
       b.loading = true; render(); refreshEditors(isbn);
       try { const r = await lookup(isbn); for(const k of Object.keys(r)) if(r[k]!=="" && r[k]!=null) b[k]=r[k]; } catch(_){}
-      b.loading = false; save(); render(); refreshEditors(isbn);
+      b.loading = false; touch(b); save(); render(); refreshEditors(isbn);
     }
   });
 }
@@ -559,7 +583,9 @@ $("coverPhoto").addEventListener("change", async (e) => {
   const f = e.target.files[0]; e.target.value = ""; const b = books.find(x=>x.isbn===snapFor); if(!f || !b) return;
   try { const blob = await resizeToJpeg(f); await photoPut(b.isbn, blob);
     if(photoUrls.has(b.isbn)) URL.revokeObjectURL(photoUrls.get(b.isbn));
-    photoUrls.set(b.isbn, URL.createObjectURL(blob)); b.photo = true; save(); render(); refreshEditors(b.isbn); toast("Photo de couverture enregistrée");
+    photoUrls.set(b.isbn, URL.createObjectURL(blob)); b.photo = true;
+    if(!sync.photos.includes(b.isbn)) sync.photos.push(b.isbn); saveSync(); touch(b);
+    save(); render(); refreshEditors(b.isbn); toast("Photo de couverture enregistrée");
   } catch(_){ toast("Impossible d'enregistrer cette photo."); }
 });
 $("manualForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("manualIsbn").value.trim(); if(!v) return; addIsbn(v, "manuel"); $("manualIsbn").value = ""; });
@@ -628,20 +654,118 @@ $("importCsv").addEventListener("change", async (e) => {
     const isbn = normalize(o.isbn); if(!isbn || books.some(b=>b.isbn===isbn)) return;
     if(o.couverture==="photo personnelle") o.couverture = ""; delete o.fichier;
     books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: parseInt(o.qte,10)||1, etat:o.etat||"Neuf", loading:false }); added++; });
-  save(); render(); toast(`${added} livre${added>1?"s":""} importé${added>1?"s":""}.`);
+  save(); render(); scheduleSync(); toast(`${added} livre${added>1?"s":""} importé${added>1?"s":""}.`);
 });
 $("btnClear").onclick = (e) => {
   const btn = e.currentTarget;
-  if(btn.dataset.armed){ books = []; photoUrls.clear();
-    idb().then(d => d.transaction("photos","readwrite").objectStore("photos").clear()).catch(()=>{}); save(); render(); $("lastWrap").hidden = true; delete btn.dataset.armed; btn.textContent = "Tout effacer"; toast("Inventaire effacé."); return; }
-  btn.dataset.armed = "1"; btn.textContent = `Confirmer : effacer ${books.length} titres`;
-  setTimeout(()=>{ delete btn.dataset.armed; btn.textContent = "Tout effacer"; }, 4000);
+  const label = () => sync.url ? "Effacer du téléphone" : "Tout effacer";
+  if(btn.dataset.armed){
+    if(sync.url && (books.some(isDirty) || sync.photos.length)){ toast("Des modifications ne sont pas encore dans le Sheet. Attendez la synchronisation."); delete btn.dataset.armed; btn.textContent = label(); flush(); return; }
+    books = []; photoUrls.clear(); sync.photos = []; saveSync();
+    idb().then(d => d.transaction("photos","readwrite").objectStore("photos").clear()).catch(()=>{}); save(); render(); $("lastWrap").hidden = true; delete btn.dataset.armed; btn.textContent = label();
+    toast(sync.url ? "Effacé du téléphone. Le Google Sheet n'est pas modifié." : "Inventaire effacé."); return; }
+  btn.dataset.armed = "1"; btn.textContent = `Confirmer : effacer ${books.length} titres${sync.url?" du téléphone":""}`;
+  setTimeout(()=>{ delete btn.dataset.armed; btn.textContent = label(); }, 4000);
 };
 
+/* ---------- Synchronisation Google Sheet ---------- */
+function touch(b, delay){ b.modifie = Date.now(); scheduleSync(delay); }
+function isDirty(b){ return !b.loading && (b.modifie||1) > (b.synced||0); }
+let syncTimer, syncing = false, syncError = "", syncedOnce = false;
+function scheduleSync(delay){ if(!sync.url) return; clearTimeout(syncTimer); syncTimer = setTimeout(flush, delay ?? 1500); }
+const SYNC_FIELDS = ["isbn","titre","auteurs","serie","tome","editeur","annee","langue","prix","qte","etat","resume","couverture","photo","notes","sources","ajoute"];
+const exportable = (b) => Object.fromEntries(SYNC_FIELDS.map(k => [k, b[k] ?? ""]));
+async function call(action, payload){
+  const r = await withTimeout(fetch(sync.url, { method:"POST", body: JSON.stringify({ token:sync.token, action, ...payload }) }), 90000);
+  let j; try { j = await r.json(); } catch(_){ throw new Error("réponse inattendue. Vérifiez que l'application Web est accessible à « Tout le monde »."); }
+  if(!j.ok) throw new Error(j.error || "erreur inconnue"); return j;
+}
+const toBase64 = (blob) => new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(",")[1]); fr.onerror = ko; fr.readAsDataURL(blob); });
+function pendingCount(){ return books.filter(isDirty).length + sync.deleted.length + sync.photos.length; }
+function syncStatus(){
+  const dot = $("syncDot"), txt = $("syncTxt"); dot.className = "dot";
+  if(!sync.url){ txt.textContent = "Google Sheet : à configurer"; return; }
+  const n = pendingCount();
+  if(syncing){ dot.classList.add("wait"); txt.textContent = `Google Sheet : envoi en cours (${n})`; }
+  else if(syncError){ dot.classList.add("err"); txt.textContent = `Google Sheet : erreur, ${syncError}`; }
+  else if(n && !navigator.onLine){ dot.classList.add("wait"); txt.textContent = `Hors ligne : ${n} modification${n>1?"s":""} en attente`; }
+  else if(n){ dot.classList.add("wait"); txt.textContent = `Google Sheet : ${n} en attente`; }
+  else { dot.classList.add("ok"); txt.textContent = "Google Sheet : à jour"; }
+}
+async function flush(){
+  if(!sync.url || syncing) return;
+  if(!navigator.onLine){ syncStatus(); return; }
+  if(!pendingCount()){ syncError = ""; syncStatus(); return; }
+  syncing = true; syncError = ""; syncStatus();
+  try {
+    const dirty = books.filter(isDirty);
+    for(let i = 0; i < dirty.length; i += 15){
+      const batch = dirty.slice(i, i+15); const stamps = batch.map(b => b.modifie || 1);
+      const j = await call("upsert", { books: batch.map(exportable) });
+      batch.forEach((b, k) => { b.synced = stamps[k]; if(j.images && j.images[b.isbn]) b.image = j.images[b.isbn]; });
+      save(); syncStatus();
+    }
+    if(sync.deleted.length){ const ids = sync.deleted.slice(); await call("delete", { isbns: ids }); sync.deleted = sync.deleted.filter(x => !ids.includes(x)); saveSync(); }
+    for(const isbn of sync.photos.slice()){
+      const b = books.find(x => x.isbn === isbn); const blob = b && b.photo ? await photoGet(isbn).catch(()=>null) : null;
+      if(blob){ const j = await call("photo", { isbn, data: await toBase64(blob) }); b.image = j.image; save(); }
+      sync.photos = sync.photos.filter(x => x !== isbn); saveSync(); syncStatus();
+    }
+    syncedOnce = true;
+  } catch(e){ syncError = e.message === "timeout" ? "délai dépassé" : (e.message || "erreur"); }
+  syncing = false; syncStatus();
+  if(!syncError && books.some(isDirty)) scheduleSync(500);
+}
+async function pull(){
+  const j = await call("list", {}); let added = 0, updated = 0;
+  for(const r of j.books){
+    const isbn = normalize(r.isbn); if(!isbn) continue;
+    const t = Date.parse(r.modifie) || 0; const local = books.find(b => b.isbn === isbn);
+    const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: +r.qte || 1, modifie: t, synced: t, loading:false };
+    delete data.photo;
+    if(!local){ books.push({ ...data, photo:false, couvertures: r.couverture ? [{src:"Sheet", url:r.couverture}] : [] }); added++; }
+    else if(t > (local.modifie || 0) && !isDirty(local)){ Object.assign(local, data); updated++; }
+  }
+  save(); render(); syncStatus();
+  return { added, updated, total: j.books.length };
+}
+function loadSync(){
+  const d = { url:"", token:"", deleted:[], photos:[] };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem("inventaire-bd-sync")) || {}); } catch(_){ return d; }
+}
+function saveSync(){ try { localStorage.setItem("inventaire-bd-sync", JSON.stringify(sync)); } catch(_){} }
+
+const syncMsg = (t, cls) => { $("syncMsg").textContent = t; $("syncMsg").className = "msg " + (cls||""); };
+$("syncBtn").onclick = () => { $("syncUrl").value = sync.url; $("syncToken").value = sync.token; syncMsg(syncError ? "Dernière erreur : " + syncError : "", syncError ? "err" : ""); $("dlgSync").showModal(); };
+$("btnSyncClose").onclick = () => $("dlgSync").close();
+$("syncForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("syncUrl").value.trim(), token = $("syncToken").value.trim();
+  if(url && !/^https:\/\/script\.google(usercontent)?\.com\//.test(url)){ syncMsg("L'adresse doit commencer par https://script.google.com/", "err"); return; }
+  sync.url = url; sync.token = token; saveSync(); syncStatus();
+  if(!url){ syncMsg("Synchronisation désactivée."); return; }
+  syncMsg("Test en cours…");
+  try { const j = await call("ping", {}); $("syncMsg").className = "msg ok";
+    $("syncMsg").innerHTML = `Connexion réussie. <a href="${esc(j.sheet)}" target="_blank" rel="noopener">Ouvrir le Sheet</a>`;
+    flush();
+  } catch(err){ syncMsg("Échec : " + err.message, "err"); }
+});
+$("btnPull").onclick = async () => {
+  if(!sync.url){ syncMsg("Enregistrez d'abord l'adresse et le code.", "err"); return; }
+  syncMsg("Récupération…");
+  try { const r = await pull(); syncMsg(`${r.total} livres dans le Sheet : ${r.added} ajoutés au téléphone, ${r.updated} mis à jour.`, "ok"); }
+  catch(err){ syncMsg("Échec : " + err.message, "err"); }
+};
+window.addEventListener("online", () => flush());
+window.addEventListener("offline", syncStatus);
+setInterval(() => { if(pendingCount()) flush(); }, 45000);
+
 /* Les recherches interrompues (page fermée pendant un scan) sont relancées. */
-books.filter(b=>b.loading).forEach(async b => { try { Object.assign(b, await lookup(b.isbn)); } catch(_){} b.loading=false; save(); render(); });
+books.filter(b=>b.loading).forEach(async b => { try { Object.assign(b, await lookup(b.isbn)); } catch(_){} b.loading=false; touch(b); save(); render(); });
 render();
 loadPhotoUrls();
+if(sync.url) $("btnClear").textContent = "Effacer du téléphone";
+syncStatus(); flush();
 })();
 </script>
 </body>

@@ -225,9 +225,12 @@ dialog.crop{width:min(640px,100vw);max-width:100vw;max-height:100dvh;margin:auto
   <label class="field"><span class="label">Code d'accès</span>
     <input id="syncToken" class="mono" autocomplete="off"></label>
   <p class="msg" id="syncMsg" aria-live="polite"></p>
+  <div id="linkBox" hidden class="field"><span class="label">Lien à ouvrir sur l'autre téléphone (il contient le code d'accès : ne le publiez pas)</span>
+    <input id="linkTxt" class="mono" readonly style="font-size:12px"></div>
   <div class="row">
     <button type="submit" class="primary">Enregistrer et tester</button>
     <button type="button" id="btnPull">Récupérer depuis le Sheet</button>
+    <button type="button" id="btnLink">Relier un autre téléphone</button>
     <button type="button" class="ghost" id="btnSyncClose">Fermer</button>
   </div>
 </form></dialog>
@@ -1020,7 +1023,15 @@ function isDirty(b){ return !b.loading && (b.modifie||1) > (b.synced||0); }
 let syncTimer, syncing = false, syncError = "", syncedOnce = false;
 function scheduleSync(delay){ if(!sync.url) return; clearTimeout(syncTimer); syncTimer = setTimeout(flush, delay ?? 1500); }
 const SYNC_FIELDS = ["isbn","type","age","titre","auteurs","serie","tome","editeur","annee","langue","prix","qte","etat","resume","couverture","photo","notes","sources","ajoute"];
-const exportable = (b) => Object.fromEntries(SYNC_FIELDS.map(k => [k, b[k] ?? ""]));
+function exportable(b){
+  const o = Object.fromEntries(SYNC_FIELDS.map(k => [k, b[k] ?? ""]));
+  o.photo = !!(b.photo || b.photoDistante);
+  if(b.photoDistante && !b.photo) o.couverture = "";
+  // Plusieurs téléphones : on envoie la différence de quantité depuis la dernière synchro, que le Sheet additionne.
+  if(b.qteBase != null || !b.synced){ o.qteDelta = qn(b.qte) - (b.qteBase ?? 0); }
+  if(!b.synced) o.fusion = true;                 // jamais envoyé : ne pas vider ce qu'un autre téléphone a déjà rempli
+  return o;
+}
 async function call(action, payload){
   const r = await withTimeout(fetch(sync.url, { method:"POST", body: JSON.stringify({ token:sync.token, action, ...payload }) }), 90000);
   let j; try { j = await r.json(); } catch(_){ throw new Error("réponse inattendue. Vérifiez que l'application Web est accessible à « Tout le monde »."); }
@@ -1030,7 +1041,11 @@ const toBase64 = (blob) => new Promise((ok, ko) => { const fr = new FileReader()
 function pendingCount(){ return books.filter(isDirty).length + sync.deleted.length + sync.photos.length; }
 function syncStatus(){
   const dot = $("syncDot"), txt = $("syncTxt"); dot.className = "dot";
-  if(!sync.url){ txt.textContent = "Google Sheet : à configurer"; return; }
+  if(!sync.url){
+    if(books.length){ dot.classList.add("err"); txt.textContent = `Pas relié au Google Sheet : ${books.length} article${books.length>1?"s":""} seulement sur ce téléphone`; }
+    else txt.textContent = "Google Sheet : à configurer";
+    return;
+  }
   const n = pendingCount();
   if(syncing){ dot.classList.add("wait"); txt.textContent = `Google Sheet : envoi en cours (${n})`; }
   else if(syncError){ dot.classList.add("err"); txt.textContent = `Google Sheet : erreur, ${syncError}`; }
@@ -1045,10 +1060,15 @@ async function flush(){
   syncing = true; syncError = ""; syncStatus();
   try {
     const dirty = books.filter(isDirty);
-    for(let i = 0; i < dirty.length; i += 15){
-      const batch = dirty.slice(i, i+15); const stamps = batch.map(b => b.modifie || 1);
+    for(let i = 0; i < dirty.length; i += 10){
+      const batch = dirty.slice(i, i+10); const stamps = batch.map(b => b.modifie || 1), sent = batch.map(b => qn(b.qte));
       const j = await call("upsert", { books: batch.map(exportable) });
-      batch.forEach((b, k) => { b.synced = stamps[k]; if(j.images && j.images[b.isbn]) b.image = j.images[b.isbn]; });
+      batch.forEach((b, k) => {
+        b.synced = stamps[k]; if(j.images && j.images[b.isbn]) b.image = j.images[b.isbn];
+        const S = j.qtes && j.qtes[b.isbn];
+        if(S != null){ b.qte = Math.max(0, S + (qn(b.qte) - sent[k])); b.qteBase = S; }   // quantité totale du Sheet (autres téléphones compris)
+      });
+      render(); if(lastIsbn && batch.some(b => b.isbn === lastIsbn)) showLast(lastIsbn);
       save(); syncStatus();
     }
     if(sync.deleted.length){ const ids = sync.deleted.slice(); await call("delete", { isbns: ids }); sync.deleted = sync.deleted.filter(x => !ids.includes(x)); saveSync(); }
@@ -1062,18 +1082,41 @@ async function flush(){
   syncing = false; syncStatus();
   if(!syncError && books.some(isDirty)) scheduleSync(500);
 }
+const driveImg = (u) => { const id = (String(u || "").match(/[-\w]{25,}/) || [""])[0]; return id ? `https://lh3.googleusercontent.com/d/${id}=w600` : ""; };
+let pulling = false;
 async function pull(){
-  const j = await call("list", {}); let added = 0, updated = 0;
-  for(const r of j.books){
-    const isbn = normalize(r.isbn); if(!isbn) continue;
-    const t = Date.parse(r.modifie) || 0; const local = books.find(b => b.isbn === isbn);
-    const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: qn(r.qte), modifie: t, synced: t, loading:false };
-    delete data.photo;
-    if(!local){ books.push({ ...data, photo:false, couvertures: r.couverture ? [{src:"Sheet", url:r.couverture}] : [] }); added++; }
-    else if(t > (local.modifie || 0) && !isDirty(local)){ Object.assign(local, data); updated++; }
-  }
-  save(); render(); syncStatus();
-  return { added, updated, total: j.books.length };
+  if(pulling) return { added: 0, updated: 0, removed: 0, total: 0 };
+  pulling = true;
+  try {
+    const j = await call("list", {}); let added = 0, updated = 0, removed = 0;
+    const seen = new Set();
+    for(const r of j.books){
+      const isbn = normalize(r.isbn); if(!isbn) continue; seen.add(isbn);
+      const t = Date.parse(r.modifie) || 0; const local = books.find(b => b.isbn === isbn);
+      const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: qn(r.qte), qteBase: qn(r.qte), modifie: t, synced: t, loading:false };
+      delete data.photo;
+      if(r.photo && r.image){ data.couverture = driveImg(r.image); data.photoDistante = true; }   // photo prise sur un autre téléphone
+      if(!local){ books.push({ ...data, photo:false, couvertures: data.couverture ? [{src: data.photoDistante ? "Photo" : "Sheet", url: data.couverture}] : [] }); added++; }
+      else if(!isDirty(local) && !sync.photos.includes(isbn) && (t > (local.modifie || 0) || local.qteBase == null)){
+        if(local.photo) { delete data.couverture; delete data.photoDistante; }                      // garder la photo prise ici
+        Object.assign(local, data); updated++;
+      }
+    }
+    // Supprimé sur un autre téléphone : l'article n'est plus dans le Sheet et n'a rien en attente ici.
+    const avant = books.length;
+    books = books.filter(b => seen.has(b.isbn) || !b.synced || isDirty(b) || b.loading || sync.photos.includes(b.isbn));
+    removed = avant - books.length;
+    save(); render(); syncStatus(); if(lastIsbn && !books.some(b => b.isbn === lastIsbn)){ $("lastWrap").hidden = true; lastIsbn = null; }
+    return { added, updated, removed, total: j.books.length };
+  } finally { pulling = false; }
+}
+/* Envoie ce qui attend, puis récupère ce que les autres téléphones ont fait. */
+let lastPull = 0;
+async function syncAll(){
+  if(!sync.url || !navigator.onLine) return;
+  await flush();
+  if(syncError || syncing) return;
+  try { await pull(); lastPull = Date.now(); } catch(e){ syncError = e.message || "erreur"; syncStatus(); }
 }
 function loadSync(){
   const d = { url:"", token:"", deleted:[], photos:[] };
@@ -1093,16 +1136,37 @@ $("syncForm").addEventListener("submit", async (e) => {
   syncMsg("Test en cours…");
   try { const j = await call("ping", {}); $("syncMsg").className = "msg ok";
     $("syncMsg").innerHTML = `Connexion réussie. <a href="${esc(j.sheet)}" target="_blank" rel="noopener">Ouvrir le Sheet</a>`;
-    flush();
+    $("btnClear").textContent = "Effacer du téléphone"; syncAll();
   } catch(err){ syncMsg("Échec : " + err.message, "err"); }
 });
 $("btnPull").onclick = async () => {
   if(!sync.url){ syncMsg("Enregistrez d'abord l'adresse et le code.", "err"); return; }
   syncMsg("Récupération…");
-  try { const r = await pull(); syncMsg(`${r.total} livres dans le Sheet : ${r.added} ajoutés au téléphone, ${r.updated} mis à jour.`, "ok"); }
+  try { await flush(); const r = await pull(); lastPull = Date.now();
+    syncMsg(`${r.total} articles dans le Sheet : ${r.added} ajoutés à ce téléphone, ${r.updated} mis à jour${r.removed ? `, ${r.removed} retirés (supprimés ailleurs)` : ""}.`, "ok"); }
   catch(err){ syncMsg("Échec : " + err.message, "err"); }
 };
-window.addEventListener("online", () => flush());
+$("btnLink").onclick = async () => {
+  if(!sync.url || !sync.token){ syncMsg("Enregistrez d'abord l'adresse et le code sur ce téléphone.", "err"); return; }
+  const lien = location.origin + location.pathname + "#relier=" + encodeURIComponent(btoa(JSON.stringify({ u: sync.url, t: sync.token })));
+  $("linkBox").hidden = false; $("linkTxt").value = lien; $("linkTxt").select();
+  try { if(navigator.share){ await navigator.share({ title: "Inventaire BD", text: "Ouvre ce lien sur ton téléphone pour scanner dans le même inventaire :", url: lien }); return; } } catch(_){ return; }
+  try { await navigator.clipboard.writeText(lien); syncMsg("Lien copié. Envoyez-le sur l'autre téléphone (SMS, WhatsApp, mail) et ouvrez-le dans Chrome.", "ok"); }
+  catch(_){ syncMsg("Copiez le lien ci-dessous et ouvrez-le sur l'autre téléphone.", "ok"); }
+};
+/* Ouverture d'un lien « relier » : ce téléphone rejoint le même Google Sheet. */
+(function relierDepuisLien(){
+  const m = location.hash.match(/^#relier=(.+)$/); if(!m) return;
+  try {
+    const c = JSON.parse(atob(decodeURIComponent(m[1])));
+    if(/^https:\/\/script\.google(usercontent)?\.com\//.test(c.u || "") && c.t){ sync.url = c.u; sync.token = c.t; saveSync();
+      setTimeout(() => toast(books.length ? `Téléphone relié au Google Sheet : envoi de ${books.length} article${books.length>1?"s":""}…` : "Téléphone relié au Google Sheet"), 300); }
+  } catch(_){ setTimeout(() => toast("Lien de connexion illisible. Recopiez-le en entier."), 300); }
+  history.replaceState(null, "", location.pathname + location.search);
+})();
+window.addEventListener("online", () => syncAll());
+document.addEventListener("visibilitychange", () => { if(!document.hidden && Date.now() - lastPull > 20000) syncAll(); });
+setInterval(() => { if(!document.hidden && sync.url) syncAll(); }, 120000);
 window.addEventListener("offline", syncStatus);
 setInterval(() => { if(pendingCount()) flush(); }, 45000);
 
@@ -1111,7 +1175,7 @@ books.filter(b=>b.loading).forEach(async b => { try { Object.assign(b, await loo
 render();
 loadPhotoUrls();
 if(sync.url) $("btnClear").textContent = "Effacer du téléphone";
-syncStatus(); flush();
+syncStatus(); syncAll();
 })();
 </script>
 </body>

@@ -255,6 +255,8 @@ const ISBN_LANG = [["97910","Français"],["97911","Coréen"],["97912","Italien"]
   ["97894","Néerlandais"],["97887","Danois"],["97891","Suédois"],["97882","Norvégien"],["97885","Portugais"],["978972","Portugais"],["978989","Portugais"],
   ["97889","Coréen"],["97883","Polonais"],["9785","Russe"]];
 function langFromIsbn(c){ let best = ""; for(const [p, l] of ISBN_LANG) if(c.startsWith(p) && p.length > best.length){ best = p; var lang = l; } return best ? lang : ""; }
+/* Un livre peut avoir deux langues (bilingue) : elles sont stockées ensemble, ex. « Français, Arabe ». */
+const splitLangs = (v) => String(v || "").split(/\s*[,/&+]\s*|\s+et\s+/i).map(x => x.trim()).filter(Boolean);
 const ETATS = ["Neuf","Comme neuf","Très bon état","Bon état","État correct"];
 const TYPES = ["Livre","Jouet","Jeu","Autre"];
 const isBookCode = (c) => /^97[89]/.test(String(c||""));
@@ -536,13 +538,14 @@ function render(){
     <li data-isbn="${b.isbn}" tabindex="0">
       ${coverHtml(b)}
       <div class="meta"><div class="t">${esc(b.titre) || `<span class="missing">${b.loading?"Recherche…":"Titre inconnu"}</span>`}</div>
-        <div class="a">${[typeOf(b)!=="Livre" && typeOf(b), b.langue && b.langue!=="Français" && b.langue].filter(Boolean).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}${esc(b.auteurs || b.editeur)||'<span class="mono">'+b.isbn+'</span>'}</div></div>
+        <div class="a">${[typeOf(b)!=="Livre" && typeOf(b), ...splitLangs(b.langue).filter(l => l!=="Français" || splitLangs(b.langue).length>1)].filter(Boolean).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}${esc(b.auteurs || b.editeur)||'<span class="mono">'+b.isbn+'</span>'}</div></div>
       <div class="p">${b.prix!=null&&b.prix!=="" ? eur(b.prix) : `<span class="missing">${b.loading?"":"prix ?"}</span>`}${qn(b.qte)===0?`<div class="q missing">vendu</div>`:(qn(b.qte)>1?`<div class="q">× ${b.qte}</div>`:"")}</div>
     </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? (filter==="nocover" ? "Tous les articles ont une photo." : "Aucun article ne correspond.") : "Aucun article pour l'instant. Scannez votre premier code-barres."}</li>`;
 }
 function editorHtml(b, inDialog){
   const opt = (arr, v) => arr.map(x=>`<option${x===v?" selected":""}>${x}</option>`).join("");
-  const langs = [...new Set(["Français","Anglais","Allemand","Espagnol","Italien","Néerlandais","Portugais","Japonais", b.langue].filter(Boolean))];
+  const bl = splitLangs(b.langue);
+  const langs = [...new Set(["Français","Anglais","Allemand","Espagnol","Italien","Arabe","Néerlandais","Portugais","Japonais", ...bl])];
   const t = typeOf(b), livre = t === "Livre";
   const br = livre ? { marque: "", ref: "" } : brandOf(b.isbn);
   const google = `https://www.google.com/search?q=${encodeURIComponent(br.ref ? `${br.marque} ${br.ref}` : (b.isbn + (b.titre ? " " + b.titre : "")))}`;
@@ -558,9 +561,10 @@ function editorHtml(b, inDialog){
       ${livre ? `<label class="field full"><span class="label">Auteurs</span><input data-k="auteurs" value="${esc(b.auteurs)}"></label>
       <label class="field"><span class="label">Série</span><input data-k="serie" value="${esc(b.serie)}"></label>
       <label class="field"><span class="label">Tome</span><input data-k="tome" value="${esc(b.tome)}"></label>
-      <label class="field"><span class="label">Éditeur</span><input data-k="editeur" value="${esc(b.editeur)}"></label>`
-      : `<label class="field"><span class="label">Marque</span><input data-k="editeur" value="${esc(b.editeur)}"></label>`}
-      <label class="field"><span class="label">${livre?"Langue":"Langue (si texte)"}</span><select data-k="langue"><option value=""></option>${opt(langs,b.langue)}</select></label>
+      <label class="field full"><span class="label">Éditeur</span><input data-k="editeur" value="${esc(b.editeur)}"></label>`
+      : `<label class="field full"><span class="label">Marque</span><input data-k="editeur" value="${esc(b.editeur)}"></label>`}
+      <label class="field"><span class="label">${livre?"Langue":"Langue (si texte)"}</span><select data-k="langue" data-li="0"><option value=""></option>${opt(langs,bl[0]||"")}</select></label>
+      <label class="field"><span class="label">2e langue (bilingue)</span><select data-k="langue" data-li="1"><option value="">Aucune</option>${opt(langs,bl[1]||"")}</select></label>
       <label class="field"><span class="label">${livre?"Prix public (€)":"Prix neuf (€)"}</span><input data-k="prix" inputmode="decimal" class="mono" placeholder="${livre?"voir dos du livre":"prix en magasin"}" value="${b.prix==null?"":String(b.prix).replace(".",",")}"></label>
       <label class="field"><span class="label">Quantité dispo</span><input data-k="qte" type="number" min="0" value="${qn(b.qte)}"></label>
       <label class="field full"><span class="label">État</span><select data-k="etat">${opt(ETATS,b.etat)}</select></label>
@@ -582,6 +586,8 @@ function bindEditor(root){
     const k = e.target.dataset.k; if(!k) return;
     const isbn = e.target.closest("[data-isbn]").dataset.isbn; const b = books.find(x=>x.isbn===isbn); if(!b) return;
     let v = e.target.value;
+    if(k==="langue" && e.target.dataset.li != null)       // les deux listes « Langue » et « 2e langue » forment une seule valeur
+      v = [...new Set([...e.target.closest(".card").querySelectorAll('select[data-k="langue"]')].map(x => x.value).filter(Boolean))].join(", ");
     if(k==="prix") v = v.trim()==="" ? null : (parsePrice(v.replace(",",".")+"€") ?? b.prix);
     if(k==="qte"){ if(v.trim()==="") return; v = Math.max(0, parseInt(v,10)||0); }
     b[k] = v; touch(b, 4000); save(); render();

@@ -70,6 +70,10 @@ textarea{min-height:64px;resize:vertical}
 .cover{width:72px;aspect-ratio:2/3;flex:none;border-radius:6px;background:var(--line);object-fit:cover;max-width:100%}
 .cover.ph{display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);text-align:center;padding:4px}
 .linkish{background:none;border:none;padding:4px 0;min-height:0;justify-content:flex-start;color:var(--muted);font-size:13px;font-weight:500;text-decoration:underline;text-underline-offset:3px;width:fit-content}
+.extra{position:relative;flex:none}
+.extra img{width:64px;aspect-ratio:3/4;object-fit:cover;border-radius:6px;display:block;border:2px solid var(--line)}
+.extra .xdel{position:absolute;top:-8px;right:-8px;width:24px;height:24px;min-height:0;padding:0;border-radius:50%;border:2px solid var(--panel);background:var(--danger);color:#fff;font-size:15px;line-height:1}
+.extra .pending{position:absolute;left:4px;bottom:4px;width:10px;height:10px;border-radius:50%;background:var(--accent);border:2px solid var(--panel)}
 .coverwrap{position:relative;display:block;flex:none;padding:0;border:none;background:none;min-height:0;border-radius:6px;cursor:pointer}
 .coverwrap .cam{position:absolute;right:-6px;bottom:-6px;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#1b2a4a;display:flex;align-items:center;justify-content:center;border:2px solid var(--panel)}
 .snapcover{flex-direction:column;gap:4px;min-height:0;border:2px dashed var(--accent);background:color-mix(in srgb,var(--accent) 14%,var(--panel));color:var(--ink);font:600 11px/1.15 var(--font-body);cursor:pointer;hyphens:manual}
@@ -168,6 +172,8 @@ dialog.crop{width:min(640px,100vw);max-width:100vw;max-height:100dvh;margin:auto
       <input type="file" id="photo" accept="image/*" capture="environment" hidden>
       <input type="file" id="coverPhoto" accept="image/*" capture="environment" hidden>
       <input type="file" id="coverGallery" accept="image/*" hidden>
+      <input type="file" id="extraPhoto" accept="image/*" capture="environment" hidden>
+      <input type="file" id="extraGallery" accept="image/*" hidden>
     </div>
     <form class="manual" id="manualForm">
       <input id="manualIsbn" inputmode="numeric" class="mono" placeholder="ISBN ou code EAN" aria-label="Code-barres" autocomplete="off">
@@ -188,6 +194,7 @@ dialog.crop{width:min(640px,100vw);max-width:100vw;max-height:100dvh;margin:auto
         <button id="fAll" aria-pressed="true">Tous</button>
         <button id="fTodo" aria-pressed="false">À compléter <span id="todoCount"></span></button>
         <button id="fNoCover" aria-pressed="false">Sans couverture <span id="noCoverCount"></span></button>
+        <button id="fNoMine" aria-pressed="false">Sans photo perso <span id="noMineCount"></span></button>
       </div>
     </div>
     <ul class="books" id="list"></ul>
@@ -473,9 +480,29 @@ async function resizeToJpeg(file, max=900){
   return new Promise(ok => c.toBlob(ok, "image/jpeg", .85));
 }
 function coverUrl(b){ return b.photo && photoUrls.get(b.isbn) ? photoUrls.get(b.isbn) : b.couverture; }
+/* Photos supplémentaires (jusqu'à 4) : elles s'ajoutent à la couverture sans la remplacer. Clé locale « ISBN~id ». */
+const MAX_EXTRAS = 4;
+const extraKey = (isbn, id) => `${isbn}~${id}`;
+const extraSrc = (b, x) => photoUrls.get(extraKey(b.isbn, x.id)) || driveImgSmall(x.url);
+const driveImgSmall = (u) => { const id = (String(u || "").match(/[-\w]{25,}/) || [""])[0]; return id ? `https://lh3.googleusercontent.com/d/${id}=w400` : ""; };
+async function loadExtraUrls(){
+  for(const b of books) for(const x of (b.extras || [])){
+    const k = extraKey(b.isbn, x.id); if(photoUrls.has(k)) continue;
+    const blob = await photoGet(k).catch(() => null); if(blob) photoUrls.set(k, URL.createObjectURL(blob));
+  }
+}
+function extrasHtml(b){
+  const xs = b.extras || [];
+  return `<div class="field full"><span class="label">Photos supplémentaires (${xs.length}/${MAX_EXTRAS}) · pour Vinted et le site</span>
+    <div class="covers">${xs.map(x => `<span class="extra"><img src="${esc(extraSrc(b, x))}" alt="" referrerpolicy="no-referrer">
+        ${x.url ? "" : `<i class="pending" title="En attente d'envoi"></i>`}<button type="button" class="xdel" data-act="xdel" data-id="${esc(x.id)}" aria-label="Retirer cette photo">×</button></span>`).join("")}
+      ${xs.length < MAX_EXTRAS ? `<button type="button" class="snap" data-act="xadd">+ Ajouter une photo</button>` : ""}</div>
+    ${xs.length < MAX_EXTRAS ? `<button type="button" class="linkish" data-act="xgal">Ajouter une photo déjà prise</button>` : ""}</div>`;
+}
 
 /* ---------- Ajout ---------- */
 function noCover(b){ return !b.loading && !b.photo && !b.couverture; }
+function noMine(b){ return !b.loading && !b.photo && !b.photoDistante && !(b.extras || []).length; }   // aucune photo prise par toi (utile pour Vinted)
 function isTodo(b){ return !b.loading && (!b.titre || b.prix==null || b.prix===""); }
 
 async function addIsbn(raw, origin){
@@ -533,14 +560,15 @@ function render(){
   syncStatus();
   const q = $("search").value.trim().toLowerCase();
   const nc = books.filter(noCover).length; $("noCoverCount").textContent = nc ? `(${nc})` : "";
-  const shown = books.filter(b => (filter==="all" || (filter==="todo" && isTodo(b)) || (filter==="nocover" && noCover(b))) && (!q || [b.titre,b.auteurs,b.isbn,b.serie,b.editeur,b.langue,typeOf(b),b.age].join(" ").toLowerCase().includes(q)));
+  const nm = books.filter(noMine).length; $("noMineCount").textContent = nm ? `(${nm})` : "";
+  const shown = books.filter(b => (filter==="all" || (filter==="todo" && isTodo(b)) || (filter==="nocover" && noCover(b)) || (filter==="nomine" && noMine(b))) && (!q || [b.titre,b.auteurs,b.isbn,b.serie,b.editeur,b.langue,typeOf(b),b.age].join(" ").toLowerCase().includes(q)));
   $("list").innerHTML = shown.length ? shown.map(b=>`
     <li data-isbn="${b.isbn}" tabindex="0">
       ${coverHtml(b)}
       <div class="meta"><div class="t">${esc(b.titre) || `<span class="missing">${b.loading?"Recherche…":"Titre inconnu"}</span>`}</div>
         <div class="a">${[typeOf(b)!=="Livre" && typeOf(b), ...splitLangs(b.langue).filter(l => l!=="Français" || splitLangs(b.langue).length>1)].filter(Boolean).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}${esc(b.auteurs || b.editeur)||'<span class="mono">'+b.isbn+'</span>'}</div></div>
       <div class="p">${b.prix!=null&&b.prix!=="" ? eur(b.prix) : `<span class="missing">${b.loading?"":"prix ?"}</span>`}${qn(b.qte)===0?`<div class="q missing">vendu</div>`:(qn(b.qte)>1?`<div class="q">× ${b.qte}</div>`:"")}</div>
-    </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? (filter==="nocover" ? "Tous les articles ont une photo." : "Aucun article ne correspond.") : "Aucun article pour l'instant. Scannez votre premier code-barres."}</li>`;
+    </li>`).join("") : `<li class="empty" style="cursor:default">${books.length ? (filter==="nocover" ? "Tous les articles ont une photo." : filter==="nomine" ? "Tous les articles ont au moins une photo à toi." : "Aucun article ne correspond.") : "Aucun article pour l'instant. Scannez votre premier code-barres."}</li>`;
 }
 function editorHtml(b, inDialog){
   const opt = (arr, v) => arr.map(x=>`<option${x===v?" selected":""}>${x}</option>`).join("");
@@ -569,6 +597,7 @@ function editorHtml(b, inDialog){
       <label class="field"><span class="label">Quantité dispo</span><input data-k="qte" type="number" min="0" value="${qn(b.qte)}"></label>
       <label class="field full"><span class="label">État</span><select data-k="etat">${opt(ETATS,b.etat)}</select></label>
       ${coverPicker(b)}
+      ${extrasHtml(b)}
       <label class="field full"><span class="label">${livre?"Résumé":"Description"}</span><textarea class="resume" data-k="resume" placeholder="${b.loading?"Recherche…":(livre?"Pas de résumé trouvé. Vous pouvez recopier la 4e de couverture.":"Décrivez le jouet : contenu, pièces, piles…")}">${esc(b.resume)}</textarea></label>
       <label class="field full"><span class="label">Notes</span><textarea data-k="notes">${esc(b.notes)}</textarea></label>
     </div>
@@ -602,8 +631,18 @@ function bindEditor(root){
     if(act==="usephoto"){ return; }
     if(act==="snap"){ snapFor = isbn; $("coverPhoto").click(); return; }      // ouvre directement l'appareil photo
     if(act==="gallery"){ snapFor = isbn; $("coverGallery").click(); return; }
+    if(act==="xadd"){ snapFor = isbn; $("extraPhoto").click(); return; }
+    if(act==="xgal"){ snapFor = isbn; $("extraGallery").click(); return; }
+    if(act==="xdel" && b){
+      const id = actEl.dataset.id, k = extraKey(isbn, id);
+      b.extras = (b.extras || []).filter(x => x.id !== id); photoDel(k);
+      if(photoUrls.has(k)){ URL.revokeObjectURL(photoUrls.get(k)); photoUrls.delete(k); }
+      sync.extras = (sync.extras || []).filter(x => x !== k); saveSync();
+      b.photosDirty = true; touch(b); save(); render(); refreshEditors(isbn); toast("Photo retirée"); return;
+    }
     if(act==="del"){
-      if(e.target.dataset.armed){ books = books.filter(x=>x.isbn!==isbn); photoDel(isbn); photoUrls.delete(isbn); save(); render();
+      if(e.target.dataset.armed){ (b && b.extras || []).forEach(x => photoDel(extraKey(isbn, x.id))); sync.extras = (sync.extras || []).filter(k => !k.startsWith(isbn + "~"));
+        books = books.filter(x=>x.isbn!==isbn); photoDel(isbn); photoUrls.delete(isbn); save(); render();
         if(sync.url){ sync.deleted.push(isbn); sync.photos = sync.photos.filter(x=>x!==isbn); saveSync(); scheduleSync(); }
         if(lastIsbn===isbn){ $("lastWrap").hidden = true; lastIsbn=null; } if($("dlg").open) $("dlg").close(); toast("Article supprimé"); }
       else { e.target.dataset.armed = "1"; e.target.textContent = "Confirmer la suppression"; setTimeout(()=>{ if(e.target.isConnected){ delete e.target.dataset.armed; e.target.textContent="Supprimer"; } }, 4000); }
@@ -626,10 +665,11 @@ $("list").addEventListener("click", (e)=>{ const li = e.target.closest("li[data-
 $("list").addEventListener("keydown", (e)=>{ if(e.key==="Enter") e.target.click(); });
 $("dlg").addEventListener("click", (e)=>{ if(e.target===$("dlg")) $("dlg").close(); });
 $("search").addEventListener("input", render);
-function setFilter(f){ filter = f; [["fAll","all"],["fTodo","todo"],["fNoCover","nocover"]].forEach(([id,v]) => $(id).setAttribute("aria-pressed", String(v===f))); render(); }
+function setFilter(f){ filter = f; [["fAll","all"],["fTodo","todo"],["fNoCover","nocover"],["fNoMine","nomine"]].forEach(([id,v]) => $(id).setAttribute("aria-pressed", String(v===f))); render(); }
 $("fAll").onclick = () => setFilter("all");
 $("fTodo").onclick = () => setFilter("todo");
 $("fNoCover").onclick = () => setFilter("nocover");
+$("fNoMine").onclick = () => setFilter("nomine");
 
 /* ---------- Toast ---------- */
 let toastTimer;
@@ -940,6 +980,21 @@ async function onCoverFile(e){
     save(); render(); refreshEditors(b.isbn); toast("Photo de couverture enregistrée");
   } catch(_){ toast("Impossible d'enregistrer cette photo."); }
 }
+async function onExtraFile(e){
+  const f = e.target.files[0]; e.target.value = ""; const b = books.find(x=>x.isbn===snapFor); if(!f || !b) return;
+  if((b.extras || []).length >= MAX_EXTRAS){ toast(`${MAX_EXTRAS} photos maximum par article.`); return; }
+  let blob = await openCropper(f);
+  if(blob === null) return;
+  try { if(!blob) blob = await resizeToJpeg(f, 1200);
+    const id = Date.now().toString(36), k = extraKey(b.isbn, id);
+    await photoPut(k, blob); photoUrls.set(k, URL.createObjectURL(blob));
+    b.extras = [...(b.extras || []), { id, url: "" }];
+    sync.extras = [...(sync.extras || []), k]; saveSync();
+    b.photosDirty = true; touch(b); save(); render(); refreshEditors(b.isbn); toast("Photo ajoutée");
+  } catch(_){ toast("Impossible d'enregistrer cette photo."); }
+}
+$("extraPhoto").addEventListener("change", onExtraFile);
+$("extraGallery").addEventListener("change", onExtraFile);
 $("coverPhoto").addEventListener("change", onCoverFile);
 $("coverGallery").addEventListener("change", onCoverFile);
 $("manualForm").addEventListener("submit", (e) => { e.preventDefault(); const v = $("manualIsbn").value.trim(); if(!v) return; addIsbn(v, "manuel"); $("manualIsbn").value = ""; });
@@ -947,13 +1002,14 @@ $("manualForm").addEventListener("submit", (e) => { e.preventDefault(); const v 
 /* ---------- Export / import CSV ---------- */
 const COLS = [["isbn","ISBN / EAN"],["type","Type"],["age","Âge"],["titre","Titre"],["auteurs","Auteurs"],["serie","Série"],["tome","Tome"],["editeur","Éditeur"],["annee","Année"],
   ["langue","Langue"],["prix","Prix public (€)"],["qte","Quantité"],["etat","État"],["resume","Résumé"],["couverture","Couverture (URL)"],
-  ["fichier","Fichier couverture"],["notes","Notes"],["sources","Sources"],["ajoute","Ajouté le"]];
+  ["fichier","Fichier couverture"],["photos","Photos supplémentaires"],["notes","Notes"],["sources","Sources"],["ajoute","Ajouté le"]];
 function toCsv(){
   const cell = (v) => { v = v==null ? "" : String(v); return /[";\n\r]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v; };
   const lines = [COLS.map(c=>c[1]).join(";")];
   books.slice().reverse().forEach(b => lines.push(COLS.map(([k]) => {
     let v = b[k]; if(k==="prix" && v!=null && v!=="") v = String(v).replace(".",","); if(k==="isbn") v = "​"+v; if(k==="ajoute") v = (v||"").slice(0,10);
     if(k==="couverture" && b.photo) v = "photo personnelle"; if(k==="fichier") v = (b.photo||b.couverture) ? b.isbn+".jpg" : "";
+    if(k==="photos") v = (b.extras || []).map(x => x.url).filter(Boolean).join(" ");
     return cell(v); }).join(";")));
   return "﻿" + lines.join("\r\n");
 }
@@ -1008,6 +1064,7 @@ $("importCsv").addEventListener("change", async (e) => {
   rows.forEach(r => { const o = {}; idx.forEach(([k,i]) => { if(i>=0) o[k] = (r[i]||"").replace(/​/g,""); });
     const isbn = normalize(o.isbn); if(!isbn || books.some(b=>b.isbn===isbn)) return;
     if(o.couverture==="photo personnelle") o.couverture = ""; delete o.fichier;
+    o.extras = String(o.photos || "").split(/\s+/).filter(u => /^https:/.test(u)).map(u => ({ id: (u.match(/[-\w]{25,}/) || [Date.now().toString(36)])[0], url: u })); delete o.photos;
     books.push({ ...o, isbn, photo:false, couvertures: o.couverture ? [{src:"Import", url:o.couverture}] : [], prix: o.prix ? parsePrice(o.prix.replace(",",".")+"€") : null, qte: qn(o.qte), etat:o.etat||"Très bon état", loading:false }); added++; });
   save(); render(); scheduleSync(); toast(`${added} livre${added>1?"s":""} importé${added>1?"s":""}.`);
 });
@@ -1016,7 +1073,7 @@ $("btnClear").onclick = (e) => {
   const label = () => sync.url ? "Effacer du téléphone" : "Tout effacer";
   if(btn.dataset.armed){
     if(sync.url && (books.some(isDirty) || sync.photos.length)){ toast("Des modifications ne sont pas encore dans le Sheet. Attendez la synchronisation."); delete btn.dataset.armed; btn.textContent = label(); flush(); return; }
-    books = []; photoUrls.clear(); sync.photos = []; saveSync();
+    books = []; photoUrls.clear(); sync.photos = []; sync.extras = []; saveSync();
     idb().then(d => d.transaction("photos","readwrite").objectStore("photos").clear()).catch(()=>{}); save(); render(); $("lastWrap").hidden = true; delete btn.dataset.armed; btn.textContent = label();
     toast(sync.url ? "Effacé du téléphone. Le Google Sheet n'est pas modifié." : "Inventaire effacé."); return; }
   btn.dataset.armed = "1"; btn.textContent = `Confirmer : effacer ${books.length} titres${sync.url?" du téléphone":""}`;
@@ -1035,7 +1092,8 @@ function exportable(b){
   if(b.photoDistante && !b.photo) o.couverture = "";
   // Plusieurs téléphones : on envoie la différence de quantité depuis la dernière synchro, que le Sheet additionne.
   if(b.qteBase != null || !b.synced){ o.qteDelta = qn(b.qte) - (b.qteBase ?? 0); }
-  if(!b.synced) o.fusion = true;                 // jamais envoyé : ne pas vider ce qu'un autre téléphone a déjà rempli
+  if(!b.synced) o.fusion = true;
+  if(b.photosDirty) o.photos = (b.extras || []).map(x => x.url).filter(Boolean).join(" ");   // liste envoyée seulement si elle a changé ici                 // jamais envoyé : ne pas vider ce qu'un autre téléphone a déjà rempli
   return o;
 }
 async function call(action, payload){
@@ -1044,7 +1102,7 @@ async function call(action, payload){
   if(!j.ok) throw new Error(j.error || "erreur inconnue"); return j;
 }
 const toBase64 = (blob) => new Promise((ok, ko) => { const fr = new FileReader(); fr.onload = () => ok(String(fr.result).split(",")[1]); fr.onerror = ko; fr.readAsDataURL(blob); });
-function pendingCount(){ return books.filter(isDirty).length + sync.deleted.length + sync.photos.length; }
+function pendingCount(){ return books.filter(isDirty).length + sync.deleted.length + sync.photos.length + (sync.extras || []).length; }
 function syncStatus(){
   const dot = $("syncDot"), txt = $("syncTxt"); dot.className = "dot";
   if(!sync.url){
@@ -1065,12 +1123,20 @@ async function flush(){
   if(!pendingCount()){ syncError = ""; syncStatus(); return; }
   syncing = true; syncError = ""; syncStatus();
   try {
+    // Photos supplémentaires d'abord : la fiche envoyée ensuite contient leurs liens.
+    for(const k of (sync.extras || []).slice()){
+      const [isbn, id] = k.split("~"); const b = books.find(x => x.isbn === isbn), x = b && (b.extras || []).find(e => e.id === id);
+      const blob = x ? await photoGet(k).catch(() => null) : null;
+      if(blob){ const j = await call("photoExtra", { isbn, id, data: await toBase64(blob) }); x.url = j.url; b.photosDirty = true; b.modifie = Date.now(); save(); }
+      sync.extras = sync.extras.filter(y => y !== k); saveSync(); syncStatus();
+    }
     const dirty = books.filter(isDirty);
     for(let i = 0; i < dirty.length; i += 10){
       const batch = dirty.slice(i, i+10); const stamps = batch.map(b => b.modifie || 1), sent = batch.map(b => qn(b.qte));
       const j = await call("upsert", { books: batch.map(exportable) });
       batch.forEach((b, k) => {
         b.synced = stamps[k]; if(j.images && j.images[b.isbn]) b.image = j.images[b.isbn];
+        if(b.modifie === stamps[k]) b.photosDirty = false;
         const S = j.qtes && j.qtes[b.isbn];
         if(S != null){ b.qte = Math.max(0, S + (qn(b.qte) - sent[k])); b.qteBase = S; }   // quantité totale du Sheet (autres téléphones compris)
       });
@@ -1102,15 +1168,18 @@ async function pull(){
       const data = { ...r, isbn, prix: (r.prix === "" || r.prix == null) ? null : Number(r.prix), qte: qn(r.qte), qteBase: qn(r.qte), modifie: t, synced: t, loading:false };
       delete data.photo;
       if(r.photo && r.image){ data.couverture = driveImg(r.image); data.photoDistante = true; }   // photo prise sur un autre téléphone
+      data.extras = String(r.photos || "").split(/\s+/).filter(u => /^https:/.test(u)).map(u => ({ id: (u.match(/[-\w]{25,}/) || [""])[0], url: u }));
+      delete data.photos;
       if(!local){ books.push({ ...data, photo:false, couvertures: data.couverture ? [{src: data.photoDistante ? "Photo" : "Sheet", url: data.couverture}] : [] }); added++; }
       else if(!isDirty(local) && !sync.photos.includes(isbn) && (t > (local.modifie || 0) || local.qteBase == null)){
         if(local.photo) { delete data.couverture; delete data.photoDistante; }                      // garder la photo prise ici
+        if(local.photosDirty || (sync.extras || []).some(k => k.startsWith(isbn + "~"))) delete data.extras;
         Object.assign(local, data); updated++;
       }
     }
     // Supprimé sur un autre téléphone : l'article n'est plus dans le Sheet et n'a rien en attente ici.
     const avant = books.length;
-    books = books.filter(b => seen.has(b.isbn) || !b.synced || isDirty(b) || b.loading || sync.photos.includes(b.isbn));
+    books = books.filter(b => seen.has(b.isbn) || !b.synced || isDirty(b) || b.loading || sync.photos.includes(b.isbn) || (sync.extras || []).some(k => k.startsWith(b.isbn + "~")));
     removed = avant - books.length;
     save(); render(); syncStatus(); if(lastIsbn && !books.some(b => b.isbn === lastIsbn)){ $("lastWrap").hidden = true; lastIsbn = null; }
     return { added, updated, removed, total: j.books.length };
@@ -1125,7 +1194,7 @@ async function syncAll(){
   try { await pull(); lastPull = Date.now(); } catch(e){ syncError = e.message || "erreur"; syncStatus(); }
 }
 function loadSync(){
-  const d = { url:"", token:"", deleted:[], photos:[] };
+  const d = { url:"", token:"", deleted:[], photos:[], extras:[] };
   try { return Object.assign(d, JSON.parse(localStorage.getItem("inventaire-bd-sync")) || {}); } catch(_){ return d; }
 }
 function saveSync(){ try { localStorage.setItem("inventaire-bd-sync", JSON.stringify(sync)); } catch(_){} }
@@ -1179,7 +1248,7 @@ setInterval(() => { if(pendingCount()) flush(); }, 45000);
 /* Les recherches interrompues (page fermée pendant un scan) sont relancées. */
 books.filter(b=>b.loading).forEach(async b => { try { Object.assign(b, await lookupAny(b.isbn)); } catch(_){} b.loading=false; touch(b); save(); render(); });
 render();
-loadPhotoUrls();
+loadPhotoUrls().then(loadExtraUrls).then(() => { render(); if(lastIsbn) showLast(lastIsbn); });
 if(sync.url) $("btnClear").textContent = "Effacer du téléphone";
 syncStatus(); syncAll();
 })();

@@ -265,7 +265,7 @@ function langFromIsbn(c){ let best = ""; for(const [p, l] of ISBN_LANG) if(c.sta
 /* Un livre peut avoir deux langues (bilingue) : elles sont stockées ensemble, ex. « Français, Arabe ». */
 const splitLangs = (v) => String(v || "").split(/\s*[,/&+]\s*|\s+et\s+/i).map(x => x.trim()).filter(Boolean);
 const ETATS = ["Neuf","Comme neuf","Très bon état","Bon état","État correct"];
-const TYPES = ["Livre","Jouet","Jeu","Autre"];
+const TYPES = ["Livre","Jouet","Jeu","Papeterie","Autre"];
 const isBookCode = (c) => /^97[89]/.test(String(c||""));
 const typeOf = (b) => b.type || (isBookCode(b.isbn) ? "Livre" : "Jouet");
 
@@ -542,7 +542,7 @@ function coverPicker(b){
       <img src="${esc(c.url)}" alt="" loading="lazy" referrerpolicy="no-referrer">${esc(c.src)}</button>`).join("");
   const mine = b.photo && photoUrls.get(b.isbn) ? `<button type="button" data-act="usephoto" aria-pressed="true"><img src="${photoUrls.get(b.isbn)}" alt="">Ma photo</button>` : "";
   return `<div class="field full"><span class="label">${typeOf(b)==="Livre"?"Couverture":"Photo"}</span>
-    <div class="covers">${mine}${opts}<button type="button" class="snap" data-act="snap">${b.photo ? "Remplacer ma photo" : (b.couverture ? "Remplacer par ma photo" : (typeOf(b)==="Livre" ? "Photographier la couverture" : "Photographier le jouet"))}</button></div>
+    <div class="covers">${mine}${opts}<button type="button" class="snap" data-act="snap">${b.photo ? "Remplacer ma photo" : (b.couverture ? "Remplacer par ma photo" : (typeOf(b)==="Livre" ? "Photographier la couverture" : typeOf(b)==="Jouet" ? "Photographier le jouet" : "Photographier l'article"))}</button></div>
     <button type="button" class="linkish" data-act="gallery">Choisir une photo déjà prise</button>
     ${!b.loading && !(b.couvertures||[]).length && !b.photo ? `<span class="hint">Aucune photo trouvée en ligne. Prenez-en une.</span>` : ""}</div>`;
 }
